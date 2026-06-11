@@ -1,0 +1,9 @@
+{
+  "navigationFallback": {
+    "rewrite": "/toolbox.html",
+    "exclude": ["/assets/*"]
+  },
+  "globalHeaders": {
+    "cache-control": "public, max-age=3600"
+  }
+}

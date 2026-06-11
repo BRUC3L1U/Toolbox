@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>工具箱</title>
+  <link href="https://api.fontshare.com/v2/css?f[]=satoshi@700,500&f[]=general-sans@400,500,600&display=swap" rel="stylesheet">
+  <style>
+    /* ===== RESET ===== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { -webkit-font-smoothing: antialiased; scroll-behavior: smooth; }
+    body {
+      min-height: 100dvh;
+      font-family: var(--font-body, sans-serif);
+      font-size: var(--text-base);
+      color: var(--color-text);
+      background-color: var(--color-bg);
+      line-height: 1.6;
+      transition: background-color 200ms ease, color 200ms ease;
+    }
+    img, svg { display: block; max-width: 100%; }
+    input, button, select { font: inherit; color: inherit; }
+    button { cursor: pointer; background: none; border: none; }
+    :focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; border-radius: var(--radius-sm); }
+
+    /* ===== DESIGN TOKENS ===== */
+    :root, [data-theme="light"] {
+      --color-bg: #f7f6f2;
+      --color-surface: #f9f8f5;
+      --color-surface-2: #fbfbf9;
+      --color-surface-offset: #f3f0ec;
+      --color-border: #d4d1ca;
+      --color-divider: #dcd9d5;
+      --color-text: #28251d;
+      --color-text-muted: #7a7974;
+      --color-text-faint: #bab9b4;
+      --color-primary: #01696f;
+      --color-primary-hover: #0c4e54;
+      --color-primary-highlight: #cedcd8;
+      --color-success: #437a22;
+      --color-success-hover: #2e5c10;
+      --color-success-highlight: #d4dfcc;
+      --color-gold: #d19900;
+      --color-gold-highlight: #e9e0c6;
+      --color-error: #a12c7b;
+      --color-error-highlight: #e0ced7;
+      --shadow-sm: 0 1px 2px oklch(0.2 0.01 80 / 0.06);
+      --shadow-md: 0 4px 12px oklch(0.2 0.01 80 / 0.08);
+      --radius-sm: 0.375rem;
+      --radius-md: 0.5rem;
+      --radius-lg: 0.75rem;
+      --radius-full: 9999px;
+      --transition-interactive: 180ms cubic-bezier(0.16, 1, 0.3, 1);
+      --font-display: 'Satoshi', 'Inter', sans-serif;
+      --font-body: 'General Sans', 'Inter', sans-serif;
+      --space-1: 0.25rem;
+      --space-2: 0.5rem;
+      --space-3: 0.75rem;
+      --space-4: 1rem;
+      --space-5: 1.25rem;
+      --space-6: 1.5rem;
+      --space-8: 2rem;
+      --space-10: 2.5rem;
+      --space-12: 3rem;
+      --text-xs: clamp(0.75rem, 0.7rem + 0.25vw, 0.875rem);
+      --text-sm: clamp(0.875rem, 0.8rem + 0.35vw, 1rem);
+      --text-base: clamp(1rem, 0.95rem + 0.25vw, 1.125rem);
+      --text-lg: clamp(1.125rem, 1rem + 0.75vw, 1.5rem);
+      --text-xl: clamp(1.5rem, 1.2rem + 1.25vw, 2.25rem);
+    }
+
+    /* ===== COMMON COMPONENTS ===== */
+    .btn-primary {
+      background: var(--color-primary);
+      color: #fff;
+      border-radius: var(--radius-md);
+      padding: var(--space-2) var(--space-5);
+      font-size: var(--text-sm);
+      font-weight: 500;
+      transition: background var(--transition-interactive);
+    }
+    .btn-primary:hover { background: var(--color-primary-hover); }
+    .btn-primary:active { transform: scale(0.98); }
+
+    .btn-ghost {
+      color: var(--color-text-muted);
+      border: 1px solid oklch(from var(--color-text) l c h / 0.15);
+      border-radius: var(--radius-md);
+      padding: var(--space-2) var(--space-4);
+      font-size: var(--text-sm);
+      transition: color var(--transition-interactive), border-color var(--transition-interactive);
+    }
+    .btn-ghost:hover { color: var(--color-text); border-color: oklch(from var(--color-text) l c h / 0.3); }
+
+    .input {
+      background: var(--color-surface-2);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      padding: var(--space-2) var(--space-3);
+      font-size: var(--text-base);
+      width: 100%;
+      color: var(--color-text);
+      transition: border-color var(--transition-interactive), box-shadow var(--transition-interactive);
+    }
+    .input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-highlight); outline: none; }
+    .input.error { border-color: var(--color-error); box-shadow: 0 0 0 3px var(--color-error-highlight); }
+
+    .card {
+      background: var(--color-surface);
+      border: 1px solid oklch(from var(--color-text) l c h / 0.08);
+      border-radius: var(--radius-lg);
+      padding: var(--space-6);
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* ===== HEADER ===== */
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      height: 56px;
+      background: var(--color-surface);
+      border-bottom: 1px solid var(--color-border);
+      display: flex;
+      align-items: center;
+      padding: 0 var(--space-6);
+      gap: var(--space-6);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      font-family: var(--font-display);
+      font-size: var(--text-base);
+      font-weight: 700;
+      color: var(--color-text);
+      flex-shrink: 0;
+    }
+    .logo svg { width: 24px; height: 24px; color: var(--color-primary); }
+
+    .tablist {
+      display: flex;
+      gap: var(--space-1);
+      align-items: center;
+      height: 100%;
+    }
+    .tab-btn {
+      padding: var(--space-2) var(--space-4);
+      font-size: var(--text-sm);
+      font-weight: 500;
+      color: var(--color-text-muted);
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      transition: color var(--transition-interactive), border-color var(--transition-interactive);
+      height: 100%;
+      display: flex;
+      align-items: center;
+    }
+    .tab-btn:hover { color: var(--color-text); }
+    .tab-btn[aria-selected="true"] {
+      color: var(--color-primary);
+      border-bottom-color: var(--color-primary);
+    }
+
+    /* ===== MAIN CONTENT ===== */
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: var(--space-8) var(--space-6);
+    }
+
+    .tool-page { display: none; }
+    .tool-page.active {
+      display: block;
+      animation: pageIn 200ms ease-out;
+    }
+    @keyframes pageIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .page-title {
+      font-family: var(--font-display);
+      font-size: var(--text-xl);
+      font-weight: 700;
+      color: var(--color-text);
+      margin-bottom: var(--space-2);
+    }
+    .page-subtitle {
+      font-size: var(--text-sm);
+      color: var(--color-text-muted);
+      margin-bottom: var(--space-6);
+    }
+
+    /* ===== ENERGY CONVERTER ===== */
+    .energy-card {
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    .converter-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-4);
+    }
+    .converter-field {
+      flex: 1;
+      text-align: center;
+    }
+    .converter-field label {
+      display: block;
+      font-size: var(--text-sm);
+      font-weight: 500;
+      color: var(--color-text-muted);
+      margin-bottom: var(--space-2);
+    }
+    .converter-field input {
+      text-align: center;
+      font-size: var(--text-lg);
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+    .converter-arrows {
+      flex-shrink: 0;
+      color: var(--color-primary);
+      margin-top: var(--space-5);
+    }
+    .converter-arrows svg { width: 28px; height: 28px; }
+
+    /* ===== COUNTER ===== */
+    .counter-card {
+      max-width: 400px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .counter-display {
+      font-family: var(--font-display);
+      font-size: clamp(3rem, 8vw, 6rem);
+      font-weight: 700;
+      color: var(--color-text);
+      font-variant-numeric: tabular-nums;
+      margin: var(--space-8) 0;
+      line-height: 1.1;
+    }
+
+    .counter-actions {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-4);
+      margin-bottom: var(--space-6);
+    }
+    .counter-btn {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: var(--color-primary);
+      color: #fff;
+      font-size: var(--text-xl);
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background var(--transition-interactive), transform 100ms ease;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .counter-btn:hover { background: var(--color-primary-hover); }
+    .counter-btn:active { transform: scale(0.95); }
+
+    .counter-reset {
+      color: var(--color-text-muted);
+      font-size: var(--text-sm);
+      font-weight: 500;
+      padding: var(--space-2) var(--space-4);
+      transition: color var(--transition-interactive);
+    }
+    .counter-reset:hover { color: var(--color-error); }
+
+    /* ===== PRICE CALCULATOR ===== */
+    .price-card {
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    .group-card {
+      background: var(--color-surface);
+      border: 1px solid oklch(from var(--color-text) l c h / 0.08);
+      border-radius: var(--radius-lg);
+      padding: var(--space-6);
+      box-shadow: var(--shadow-sm);
+      margin-bottom: var(--space-6);
+    }
+
+    .group-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--space-4);
+      padding-bottom: var(--space-3);
+      border-bottom: 1px solid var(--color-divider);
+    }
+    .group-name {
+      font-family: var(--font-display);
+      font-size: var(--text-lg);
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .group-summary {
+      font-size: var(--text-sm);
+      color: var(--color-text-muted);
+      margin-bottom: var(--space-4);
+    }
+
+    .group-empty {
+      text-align: center;
+      font-size: var(--text-sm);
+      color: var(--color-text-faint);
+      padding: var(--space-6) 0;
+    }
+
+    .group-add-form { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--color-divider); }
+    .group-add-row {
+      display: flex;
+      gap: var(--space-2);
+      align-items: center;
+    }
+    .group-add-row .input { font-size: var(--text-sm); padding: var(--space-2); }
+
+    .item-card {
+      background: var(--color-surface-2);
+      border: 1px solid oklch(from var(--color-text) l c h / 0.06);
+      border-radius: var(--radius-md);
+      padding: var(--space-4);
+      margin-bottom: var(--space-3);
+      position: relative;
+      overflow: hidden;
+    }
+    .item-card.cheapest {
+      background: var(--color-success-highlight);
+      border-left: 4px solid var(--color-success);
+    }
+
+    .item-card-inner {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: var(--space-4);
+    }
+    .item-info { flex: 1; min-width: 0; }
+    .item-name {
+      font-family: var(--font-display);
+      font-size: var(--text-base);
+      font-weight: 600;
+      color: var(--color-text);
+      margin-bottom: var(--space-1);
+    }
+    .item-cheapest-badge {
+      display: inline-block;
+      background: var(--color-success);
+      color: #fff;
+      font-size: var(--text-xs);
+      font-weight: 600;
+      padding: 2px var(--space-2);
+      border-radius: var(--radius-sm);
+      margin-left: var(--space-2);
+      vertical-align: middle;
+    }
+    .item-spec {
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+    }
+    .item-meta {
+      text-align: right;
+      flex-shrink: 0;
+    }
+    .item-total-price {
+      font-size: var(--text-sm);
+      color: var(--color-text);
+    }
+    .item-total-weight {
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+    }
+    .item-unit-price {
+      font-size: var(--text-base);
+      color: var(--color-primary);
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .item-unit-price-100 {
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+    }
+    .item-actions {
+      display: flex;
+      gap: var(--space-2);
+      justify-content: flex-end;
+      margin-top: var(--space-3);
+    }
+    .item-actions .btn-ghost { font-size: var(--text-xs); padding: var(--space-1) var(--space-3); }
+    .btn-delete:hover { color: var(--color-error); border-color: var(--color-error); }
+
+    .item-edit-form {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--space-3);
+      margin-top: var(--space-3);
+      padding-top: var(--space-3);
+      border-top: 1px solid var(--color-divider);
+    }
+    .item-edit-form .full-width { grid-column: 1 / -1; }
+    .item-edit-form .input { font-size: var(--text-sm); }
+
+    .item-edit-actions {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: var(--space-2);
+      justify-content: flex-end;
+    }
+
+    .price-empty {
+      text-align: center;
+      padding: var(--space-12) var(--space-6);
+      color: var(--color-text-faint);
+    }
+    .price-empty svg {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto var(--space-4);
+      color: var(--color-text-faint);
+      opacity: 0.5;
+    }
+    .price-empty p { font-size: var(--text-sm); }
+
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 639px) {
+      .header {
+        flex-wrap: wrap;
+        height: auto;
+        padding: var(--space-3) var(--space-4);
+        gap: var(--space-3);
+      }
+      .tablist { flex: 1 0 100%; justify-content: center; }
+      .tab-btn { padding: var(--space-2) var(--space-3); font-size: var(--text-xs); }
+      .converter-row { flex-direction: column; gap: var(--space-3); }
+      .converter-arrows { transform: rotate(90deg); margin-top: 0; }
+      .item-card-inner { flex-direction: column; }
+      .item-meta { text-align: left; }
+      .item-edit-form { grid-template-columns: 1fr; }
+      .counter-btn { width: 48px; height: 48px; }
+      .group-add-row { flex-wrap: wrap; }
+    }
+
+    @media (min-width: 1024px) {
+      .container { padding: var(--space-10) var(--space-12); }
+    }
+  </style>
+</head>
+<body>
+  <!-- ===== HEADER ===== -->
+  <header class="header">
+    <div class="logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="8" width="18" height="13" rx="2"/>
+        <path d="M8 3h8a2 2 0 012 2v3H6V5a2 2 0 012-2z"/>
+        <path d="M12 8v-5"/>
+      </svg>
+      工具箱
+    </div>
+    <nav role="tablist" class="tablist">
+      <button role="tab" class="tab-btn" aria-selected="true" aria-controls="page-energy" id="tab-energy" onclick="switchTab('energy')">热量换算</button>
+      <button role="tab" class="tab-btn" aria-selected="false" aria-controls="page-counter" id="tab-counter" onclick="switchTab('counter')">计数器</button>
+      <button role="tab" class="tab-btn" aria-selected="false" aria-controls="page-price" id="tab-price" onclick="switchTab('price')">比价计算</button>
+    </nav>
+  </header>
+
+  <!-- ===== MAIN ===== -->
+  <main class="container">
+    <!-- Energy Converter -->
+    <section id="page-energy" class="tool-page active" role="tabpanel" aria-labelledby="tab-energy">
+      <div class="card energy-card">
+        <h1 class="page-title">热量换算</h1>
+        <p class="page-subtitle">千焦（kJ）与千卡（kcal）互换</p>
+        <div class="converter-row">
+          <div class="converter-field">
+            <label for="input-kj">千焦 (kJ)</label>
+            <input id="input-kj" class="input" type="text" inputmode="decimal" placeholder="0.00" aria-label="千焦">
+          </div>
+          <div class="converter-arrows" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 3l-4 4 4 4"/>
+              <path d="M15 21l4-4-4-4"/>
+              <path d="M5 7h14"/>
+              <path d="M19 17H5"/>
+            </svg>
+          </div>
+          <div class="converter-field">
+            <label for="input-kcal">千卡 (kcal)</label>
+            <input id="input-kcal" class="input" type="text" inputmode="decimal" placeholder="0.00" aria-label="千卡">
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Counter -->
+    <section id="page-counter" class="tool-page" role="tabpanel" aria-labelledby="tab-counter">
+      <div class="card counter-card">
+        <h1 class="page-title">计数器</h1>
+        <div class="counter-display" id="counter-value" aria-live="polite">0</div>
+        <div class="counter-actions">
+          <button class="counter-btn" id="btn-minus" aria-label="减少">−</button>
+          <button class="counter-reset" id="btn-reset" aria-label="重置">重置</button>
+          <button class="counter-btn" id="btn-plus" aria-label="增加">+</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Price Calculator -->
+    <section id="page-price" class="tool-page" role="tabpanel" aria-labelledby="tab-price">
+      <div class="price-card">
+        <h1 class="page-title">商品单价对比</h1>
+        <p class="page-subtitle">创建对比组，组内商品独立比较，组间互不影响</p>
+
+        <!-- Create group -->
+        <div class="card" style="margin-bottom:var(--space-6)">
+          <h2 style="font-family:var(--font-display);font-size:var(--text-lg);font-weight:600;margin-bottom:var(--space-4)">新建对比组</h2>
+          <form id="create-group-form" style="display:flex;gap:var(--space-3)" novalidate>
+            <input id="new-group-name" class="input" type="text" placeholder="如：薯片对比、洗衣液对比" required aria-label="组名称" style="flex:1">
+            <button type="submit" class="btn-primary" style="white-space:nowrap">创建组</button>
+          </form>
+        </div>
+
+        <!-- Group list -->
+        <div id="price-list"></div>
+
+        <!-- Empty state -->
+        <div class="price-empty" id="price-empty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/>
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <path d="M16 10a4 4 0 01-8 0"/>
+          </svg>
+          <p>创建一个对比组，开始比价</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    /* ===== TAB NAVIGATION ===== */
+    function switchTab(tabId) {
+      document.querySelectorAll('.tool-page').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.setAttribute('aria-selected', 'false'));
+
+      const page = document.getElementById('page-' + tabId);
+      if (page) page.classList.add('active');
+
+      const tab = document.getElementById('tab-' + tabId);
+      if (tab) tab.setAttribute('aria-selected', 'true');
+    }
+
+    /* ===== ENERGY CONVERTER ===== */
+    function convertKjToKcal(kj) { return kj / 4.184; }
+    function convertKcalToKj(kcal) { return kcal * 4.184; }
+
+    function initEnergyConverter() {
+      const inputKj = document.getElementById('input-kj');
+      const inputKcal = document.getElementById('input-kcal');
+
+      let updating = false;
+
+      inputKj.addEventListener('input', function() {
+        if (updating) return;
+        const val = parseFloat(this.value);
+        if (isNaN(val) || this.value.trim() === '') {
+          updating = true;
+          inputKcal.value = '';
+          updating = false;
+          return;
+        }
+        updating = true;
+        inputKcal.value = convertKjToKcal(val).toFixed(2);
+        updating = false;
+      });
+
+      inputKcal.addEventListener('input', function() {
+        if (updating) return;
+        const val = parseFloat(this.value);
+        if (isNaN(val) || this.value.trim() === '') {
+          updating = true;
+          inputKj.value = '';
+          updating = false;
+          return;
+        }
+        updating = true;
+        inputKj.value = convertKcalToKj(val).toFixed(2);
+        updating = false;
+      });
+    }
+
+    /* ===== COUNTER ===== */
+    let counterState = { value: 0 };
+    let longPressTimer = null;
+    let longPressInterval = null;
+
+    function updateCounter(delta) {
+      counterState.value += delta;
+      document.getElementById('counter-value').textContent = counterState.value;
+    }
+
+    function resetCounter() {
+      counterState.value = 0;
+      document.getElementById('counter-value').textContent = 0;
+    }
+
+    function initCounter() {
+      const btnPlus = document.getElementById('btn-plus');
+      const btnMinus = document.getElementById('btn-minus');
+      const btnReset = document.getElementById('btn-reset');
+
+      function doPlus() { updateCounter(1); }
+      function doMinus() { updateCounter(-1); }
+
+      function startLongPress(actionFn) {
+        longPressTimer = setTimeout(() => {
+          longPressInterval = setInterval(actionFn, 100);
+        }, 600);
+      }
+
+      function stopLongPress() {
+        clearTimeout(longPressTimer);
+        clearInterval(longPressInterval);
+        longPressTimer = null;
+        longPressInterval = null;
+      }
+
+      btnPlus.addEventListener('pointerdown', e => { e.preventDefault(); doPlus(); startLongPress(doPlus); });
+      btnPlus.addEventListener('pointerup', stopLongPress);
+      btnPlus.addEventListener('pointerleave', stopLongPress);
+      btnPlus.addEventListener('pointercancel', stopLongPress);
+
+      btnMinus.addEventListener('pointerdown', e => { e.preventDefault(); doMinus(); startLongPress(doMinus); });
+      btnMinus.addEventListener('pointerup', stopLongPress);
+      btnMinus.addEventListener('pointerleave', stopLongPress);
+      btnMinus.addEventListener('pointercancel', stopLongPress);
+
+      btnReset.addEventListener('click', resetCounter);
+    }
+
+    /* ===== PRICE CALCULATOR ===== */
+    let groups = []; // [{ id, name, items: [...] }]
+    let editingId = null;
+    let editingGroupId = null;
+    let nextGroupId = 1;
+    let nextItemId = 1;
+
+    function calcUnitPrice(item) {
+      const totalWeight = item.unitWeight * item.packSize * item.packCount;
+      if (totalWeight <= 0) return null;
+      return item.totalPrice / totalWeight;
+    }
+
+    function findCheapestInGroup(items) {
+      if (items.length === 0) return [];
+      const withPrice = items.map(item => {
+        const up = calcUnitPrice(item);
+        return { id: item.id, unitPrice: up };
+      });
+      if (withPrice.some(w => w.unitPrice === null)) return [];
+      const minPrice = Math.min(...withPrice.map(w => w.unitPrice));
+      return withPrice.filter(w => w.unitPrice === minPrice).map(w => w.id);
+    }
+
+    function saveGroups() {
+      try {
+        localStorage.setItem('toolbox_price_groups', JSON.stringify({ groups, nextGroupId, nextItemId }));
+      } catch (e) {}
+    }
+
+    function loadGroups() {
+      try {
+        const raw = localStorage.getItem('toolbox_price_groups');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed.groups && Array.isArray(parsed.groups)) {
+            groups = parsed.groups;
+            nextGroupId = parsed.nextGroupId || 1;
+            nextItemId = parsed.nextItemId || 1;
+            if (groups.length > 0) {
+              nextGroupId = Math.max(...groups.map(g => g.id)) + 1;
+              for (const g of groups) {
+                if (g.items.length > 0) {
+                  const maxId = Math.max(...g.items.map(i => i.id));
+                  if (maxId >= nextItemId) nextItemId = maxId + 1;
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        groups = [];
+      }
+    }
+
+    function addGroup(name) {
+      groups.push({ id: nextGroupId++, name, items: [] });
+      saveGroups();
+      renderPriceList();
+    }
+
+    function deleteGroup(groupId) {
+      groups = groups.filter(g => g.id !== groupId);
+      saveGroups();
+      renderPriceList();
+    }
+
+    function addItemToGroup(groupId, formData) {
+      const group = groups.find(g => g.id === groupId);
+      if (!group) return;
+      const item = {
+        id: nextItemId++,
+        name: formData.name || ('商品 ' + (group.items.length + 1)),
+        unitWeight: parseFloat(formData.unitWeight),
+        packSize: parseInt(formData.packSize) || 1,
+        packCount: parseInt(formData.packCount) || 1,
+        totalPrice: parseFloat(formData.totalPrice)
+      };
+      group.items.push(item);
+      saveGroups();
+      renderPriceList();
+    }
+
+    function deleteItemFromGroup(groupId, itemId) {
+      const group = groups.find(g => g.id === groupId);
+      if (!group) return;
+      group.items = group.items.filter(i => i.id !== itemId);
+      saveGroups();
+      renderPriceList();
+    }
+
+    function startEditItem(groupId, itemId) {
+      editingGroupId = groupId;
+      editingId = itemId;
+      renderPriceList();
+    }
+
+    function cancelEdit() {
+      editingId = null;
+      editingGroupId = null;
+      renderPriceList();
+    }
+
+    function saveEditItem(groupId, itemId) {
+      const form = document.getElementById('edit-form-' + itemId);
+      const nameEl = form.querySelector('.edit-name');
+      const uwEl = form.querySelector('.edit-unit-weight');
+      const psEl = form.querySelector('.edit-pack-size');
+      const pcEl = form.querySelector('.edit-pack-count');
+      const tpEl = form.querySelector('.edit-total-price');
+
+      const unitWeight = parseFloat(uwEl.value);
+      const totalPrice = parseFloat(tpEl.value);
+      if (isNaN(unitWeight) || unitWeight <= 0 || isNaN(totalPrice) || totalPrice <= 0) return;
+
+      const group = groups.find(g => g.id === groupId);
+      if (!group) return;
+      const item = group.items.find(i => i.id === itemId);
+      if (!item) return;
+      item.name = nameEl.value.trim() || item.name;
+      item.unitWeight = unitWeight;
+      item.packSize = parseInt(psEl.value) || 1;
+      item.packCount = parseInt(pcEl.value) || 1;
+      item.totalPrice = totalPrice;
+
+      editingId = null;
+      editingGroupId = null;
+      saveGroups();
+      renderPriceList();
+    }
+
+    function renderPriceList() {
+      const list = document.getElementById('price-list');
+      const empty = document.getElementById('price-empty');
+
+      if (groups.length === 0) {
+        list.innerHTML = '';
+        empty.style.display = 'block';
+        return;
+      }
+      empty.style.display = 'none';
+
+      list.innerHTML = groups.map(group => {
+        const cheapestIds = findCheapestInGroup(group.items);
+        const itemsHtml = group.items.length === 0
+          ? '<div class="group-empty">该组暂无商品，请在下方表单中添加</div>'
+          : group.items.map(item => {
+              const up = calcUnitPrice(item);
+              const isCheapest = cheapestIds.includes(item.id);
+              const totalWeight = item.unitWeight * item.packSize * item.packCount;
+              const isEditing = editingId === item.id && editingGroupId === group.id;
+
+              let cardClass = 'item-card';
+              if (isCheapest && group.items.length > 1) cardClass += ' cheapest';
+
+              let body = '';
+              if (isEditing) {
+                body = `<div class="item-card-inner">
+                    <div class="item-info">
+                      <div class="item-name">${escHtml(item.name)}${isCheapest && group.items.length > 1 ? '<span class="item-cheapest-badge">最划算 ✓</span>' : ''}</div>
+                      <div class="item-spec">${item.unitWeight}g × ${item.packSize}件 × ${item.packCount}套</div>
+                    </div>
+                  </div>
+                  <form class="item-edit-form" id="edit-form-${item.id}" onsubmit="event.preventDefault(); saveEditItem(${group.id}, ${item.id});">
+                    <div class="form-field full-width">
+                      <label>商品名称</label>
+                      <input class="input edit-name" type="text" value="${escHtml(item.name)}">
+                    </div>
+                    <div class="form-field">
+                      <label>单品重量 (g)</label>
+                      <input class="input edit-unit-weight" type="number" min="0.01" step="0.01" value="${item.unitWeight}" required>
+                    </div>
+                    <div class="form-field">
+                      <label>套装内数量</label>
+                      <input class="input edit-pack-size" type="number" min="1" step="1" value="${item.packSize}">
+                    </div>
+                    <div class="form-field">
+                      <label>套装数量</label>
+                      <input class="input edit-pack-count" type="number" min="1" step="1" value="${item.packCount}">
+                    </div>
+                    <div class="form-field">
+                      <label>总价 (元)</label>
+                      <input class="input edit-total-price" type="number" min="0.01" step="0.01" value="${item.totalPrice}" required>
+                    </div>
+                    <div class="item-edit-actions">
+                      <button type="button" class="btn-ghost" onclick="cancelEdit()">取消</button>
+                      <button type="submit" class="btn-primary" style="font-size:var(--text-sm);padding:var(--space-1) var(--space-4)">保存</button>
+                    </div>
+                  </form>`;
+              } else {
+                body = `<div class="item-card-inner">
+                    <div class="item-info">
+                      <div class="item-name">${escHtml(item.name)}${isCheapest && group.items.length > 1 ? '<span class="item-cheapest-badge">最划算 ✓</span>' : ''}</div>
+                      <div class="item-spec">${item.unitWeight}g × ${item.packSize}件 × ${item.packCount}套</div>
+                    </div>
+                    <div class="item-meta">
+                      <div class="item-total-price">¥${item.totalPrice.toFixed(2)} 元</div>
+                      <div class="item-total-weight">${totalWeight.toFixed(1)} g</div>
+                      <div class="item-unit-price">${up !== null ? up.toFixed(4) : '--'} 元/g</div>
+                      <div class="item-unit-price-100">≈ ${up !== null ? (up * 100).toFixed(2) : '--'} 元/100g</div>
+                    </div>
+                  </div>
+                  <div class="item-actions">
+                    <button class="btn-ghost" onclick="startEditItem(${group.id}, ${item.id})" aria-label="编辑">编辑</button>
+                    <button class="btn-ghost btn-delete" onclick="deleteItemFromGroup(${group.id}, ${item.id})" aria-label="删除">删除</button>
+                  </div>`;
+              }
+              return '<div class="' + cardClass + '">' + body + '</div>';
+            }).join('');
+
+        const summaryHtml = group.items.length > 0 ? (() => {
+          const prices = group.items.map(i => i.totalPrice);
+          const cheapestItems = group.items.filter(i => cheapestIds.includes(i.id));
+          const cheapestPrice = cheapestItems.length > 0 ? calcUnitPrice(cheapestItems[0]) : null;
+          const maxPriceItem = group.items.reduce((a, b) => calcUnitPrice(a) > calcUnitPrice(b) ? a : b);
+          const maxPrice = calcUnitPrice(maxPriceItem);
+          let percentStr = '--';
+          if (cheapestPrice && maxPrice && maxPrice > 0) {
+            percentStr = ((maxPrice - cheapestPrice) / maxPrice * 100).toFixed(1) + '%';
+          }
+          return '<div class="group-summary">共 ' + group.items.length + ' 件商品 · 价格区间 ¥' +
+            Math.min(...prices).toFixed(2) + ' ~ ¥' + Math.max(...prices).toFixed(2) +
+            ' · 最划算比最贵便宜 ' + percentStr + '</div>';
+        })() : '';
+
+        const addFormHtml = `<div class="group-add-form">
+          <form class="group-add-item-form" id="add-form-${group.id}" novalidate>
+            <div class="group-add-row">
+              <input class="input" type="text" placeholder="商品名称" data-field="name" style="min-width:120px">
+              <input class="input" type="number" min="0.01" step="0.01" placeholder="单品重量(g) *" data-field="unitWeight" style="min-width:100px" required>
+              <input class="input" type="number" min="1" step="1" placeholder="件数" data-field="packSize" value="1" style="min-width:60px">
+              <input class="input" type="number" min="1" step="1" placeholder="套数" data-field="packCount" value="1" style="min-width:60px">
+              <input class="input" type="number" min="0.01" step="0.01" placeholder="总价(元) *" data-field="totalPrice" style="min-width:100px" required>
+              <button type="submit" class="btn-primary" style="font-size:var(--text-xs);padding:var(--space-2) var(--space-3);white-space:nowrap">添加</button>
+            </div>
+          </form>
+        </div>`;
+
+        return `<div class="group-card">
+          <div class="group-header">
+            <h2 class="group-name">${escHtml(group.name) || '未命名组'}</h2>
+            <button class="btn-ghost btn-delete" style="font-size:var(--text-xs);padding:var(--space-1) var(--space-3)" onclick="deleteGroup(${group.id})" aria-label="删除组">删除组</button>
+          </div>
+          ${summaryHtml}
+          <div class="group-items">${itemsHtml}</div>
+          ${addFormHtml}
+        </div>`;
+      }).join('');
+
+      // Bind add-to-group form handlers
+      groups.forEach(group => {
+        const form = document.getElementById('add-form-' + group.id);
+        if (!form) return;
+        form.addEventListener('submit', function(e) {
+          e.preventDefault();
+          const unitWeight = parseFloat(form.querySelector('[data-field="unitWeight"]').value);
+          const totalPrice = parseFloat(form.querySelector('[data-field="totalPrice"]').value);
+          if (isNaN(unitWeight) || unitWeight <= 0 || isNaN(totalPrice) || totalPrice <= 0) {
+            return;
+          }
+          const formData = {
+            name: form.querySelector('[data-field="name"]').value.trim(),
+            unitWeight: unitWeight,
+            packSize: form.querySelector('[data-field="packSize"]').value,
+            packCount: form.querySelector('[data-field="packCount"]').value,
+            totalPrice: totalPrice
+          };
+          addItemToGroup(group.id, formData);
+          form.reset();
+          form.querySelector('[data-field="packSize"]').value = '1';
+          form.querySelector('[data-field="packCount"]').value = '1';
+        });
+      });
+    }
+
+    function escHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function initPriceCalculator() {
+      loadGroups();
+      renderPriceList();
+
+      const createGroupForm = document.getElementById('create-group-form');
+      if (createGroupForm) {
+        createGroupForm.addEventListener('submit', function(e) {
+          e.preventDefault();
+          const name = document.getElementById('new-group-name').value.trim();
+          if (!name) return;
+          addGroup(name);
+          document.getElementById('new-group-name').value = '';
+        });
+      }
+    }
+
+    /* ===== INIT ===== */
+    document.addEventListener('DOMContentLoaded', () => {
+      initEnergyConverter();
+      initCounter();
+      initPriceCalculator();
+    });
+  </script>
+</body>
+</html>
