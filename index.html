@@ -498,7 +498,7 @@
       margin-bottom: var(--space-6);
     }
     .boss-toolbar .page-title { margin-bottom: 0; }
-    .boss-notify-btn { font-size: var(--text-sm); white-space: nowrap; }
+    .boss-notify-btn { font-size: var(--text-sm); white-space: nowrap; margin-top: 0.75rem; }
     .boss-notify-btn[aria-pressed="true"] {
       color: var(--color-success);
       border-color: oklch(from var(--color-success) l c h / 0.4);
@@ -630,7 +630,6 @@
     <section id="page-timer" class="tool-page" role="tabpanel" aria-labelledby="tab-timer">
       <div class="boss-toolbar">
         <h1 class="page-title">Boss 计时</h1>
-        <button id="boss-notify-toggle" class="btn-ghost boss-notify-btn" aria-pressed="false">开启刷新提醒</button>
       </div>
       <div class="boss-cards">
         <div class="boss-card normal">
@@ -676,6 +675,7 @@
               </div>
             </div>
           </div>
+          <button id="boss-notify-toggle" class="btn-ghost boss-notify-btn" aria-pressed="false">开启刷新提醒</button>
         </div>
       </div>
     </section>
@@ -1157,12 +1157,12 @@
         return pad(m) + ':' + pad(s);
       }
 
-      function notifySpawn(cfg) {
+      function notifyAdvance() {
         if (!notifyEnabled || !('Notification' in window) || Notification.permission !== 'granted') return;
         try {
-          new Notification(cfg.title + '已刷新', {
-            body: '首领已出现，快去挑战！',
-            tag: 'boss-' + cfg.key,
+          new Notification('世界首领 5 分钟后刷新', {
+            body: '请提前做好准备！',
+            tag: 'boss-adv-world',
           });
         } catch (e) {}
       }
@@ -1172,7 +1172,6 @@
         cfg.card.classList.remove('boss-spawned');
         void cfg.card.offsetWidth;
         cfg.card.classList.add('boss-spawned');
-        notifySpawn(cfg);
       }
 
       const WORLD = {
@@ -1181,7 +1180,7 @@
         interval: 12600 * 1000,
         els: { spawn: document.getElementById('w-spawn'), h: document.getElementById('w-h'), m: document.getElementById('w-m'), s: document.getElementById('w-s') },
         card: document.querySelector('.boss-card.world'),
-        prev: { h: -1, m: -1, s: -1 }, next: 0, hasHours: true, notifiedFor: undefined,
+        prev: { h: -1, m: -1, s: -1 }, next: 0, hasHours: true, notifiedFor: -1, advNotifiedFor: -1,
       };
       const NORMAL = {
         key: 'normal', title: '巢穴首领',
@@ -1189,14 +1188,14 @@
         interval: 2700 * 1000,
         els: { spawn: document.getElementById('n-spawn'), m: document.getElementById('n-m'), s: document.getElementById('n-s') },
         card: document.querySelector('.boss-card.normal'),
-        prev: { m: -1, s: -1 }, next: 0, hasHours: false, notifiedFor: undefined,
+        prev: { m: -1, s: -1 }, next: 0, hasHours: false, notifiedFor: -1,
       };
 
       function updateCard(cfg) {
         const now = Date.now();
         if (now >= cfg.next) cfg.next = getNext(cfg.base, cfg.interval);
         // Detect a rollover into the next cycle → fire spawn effects once.
-        if (cfg.notifiedFor !== undefined && cfg.next !== cfg.notifiedFor) onSpawn(cfg);
+        if (cfg.notifiedFor !== -1 && cfg.next !== cfg.notifiedFor) onSpawn(cfg);
         cfg.notifiedFor = cfg.next;
 
         cfg.els.spawn.textContent = fmtDate(cfg.next);
@@ -1218,6 +1217,11 @@
         // Urgency highlight in the final minute before a spawn.
         if (totalSecs > 0 && totalSecs <= 60) cfg.card.classList.add('boss-soon');
         else cfg.card.classList.remove('boss-soon');
+
+        if (cfg.advNotifiedFor !== -1 && totalSecs > 0 && totalSecs <= 300 && cfg.next !== cfg.advNotifiedFor) {
+          notifyAdvance();
+          cfg.advNotifiedFor = cfg.next;
+        }
 
         return totalSecs;
       }
