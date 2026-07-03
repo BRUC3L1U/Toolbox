@@ -541,11 +541,11 @@
   <!-- ===== HEADER ===== -->
   <header class="header">
     <div class="logo">工具箱</div>
-    <nav role="tablist" class="tablist">
-      <button role="tab" class="tab-btn" aria-selected="true" aria-controls="page-energy" id="tab-energy" onclick="switchTab('energy')">热量换算</button>
-      <button role="tab" class="tab-btn" aria-selected="false" aria-controls="page-counter" id="tab-counter" onclick="switchTab('counter')">计数器</button>
-      <button role="tab" class="tab-btn" aria-selected="false" aria-controls="page-price" id="tab-price" onclick="switchTab('price')">比价计算</button>
-      <button role="tab" class="tab-btn" aria-selected="false" aria-controls="page-timer" id="tab-timer" onclick="switchTab('timer')">Boss计时</button>
+    <nav role="tablist" class="tablist" id="main-tablist">
+      <button role="tab" class="tab-btn" aria-selected="true" aria-controls="page-energy" id="tab-energy" tabindex="0">热量换算</button>
+      <button role="tab" class="tab-btn" aria-selected="false" aria-controls="page-counter" id="tab-counter" tabindex="-1">计数器</button>
+      <button role="tab" class="tab-btn" aria-selected="false" aria-controls="page-price" id="tab-price" tabindex="-1">比价计算</button>
+      <button role="tab" class="tab-btn" aria-selected="false" aria-controls="page-timer" id="tab-timer" tabindex="-1">Boss计时</button>
     </nav>
   </header>
 
@@ -679,14 +679,22 @@
     const TAB_IDS = ['energy', 'counter', 'price', 'timer'];
     const ACTIVE_TAB_KEY = 'toolbox_active_tab';
 
+    // Roving tabindex: only the active tab is in the tab order (tabindex="0"),
+    // the rest are tabindex="-1" but still reachable via arrow keys.
     function setActiveTab(tabId) {
       if (!TAB_IDS.includes(tabId)) tabId = 'energy';
       document.querySelectorAll('.tool-page').forEach(p => p.classList.remove('active'));
-      document.querySelectorAll('.tab-btn').forEach(b => b.setAttribute('aria-selected', 'false'));
+      document.querySelectorAll('.tab-btn').forEach(b => {
+        b.setAttribute('aria-selected', 'false');
+        b.setAttribute('tabindex', '-1');
+      });
       const page = document.getElementById('page-' + tabId);
       if (page) page.classList.add('active');
       const tab = document.getElementById('tab-' + tabId);
-      if (tab) tab.setAttribute('aria-selected', 'true');
+      if (tab) {
+        tab.setAttribute('aria-selected', 'true');
+        tab.setAttribute('tabindex', '0');
+      }
     }
 
     function switchTab(tabId) {
@@ -710,6 +718,46 @@
       return 'energy';
     }
 
+    // WAI-ARIA tablist keyboard interaction: arrow keys move between tabs,
+    // Home/End jump to the first/last tab. Click is delegated so no inline
+    // onclick handlers are needed on the buttons.
+    function initTabKeyboard() {
+      const tablist = document.getElementById('main-tablist');
+      if (!tablist) return;
+      tablist.addEventListener('click', function(e) {
+        const btn = e.target.closest('.tab-btn');
+        if (!btn) return;
+        switchTab(btn.id.replace('tab-', ''));
+      });
+      tablist.addEventListener('keydown', function(e) {
+        const btn = e.target.closest('.tab-btn');
+        if (!btn) return;
+        const currentIdx = TAB_IDS.indexOf(btn.id.replace('tab-', ''));
+        if (currentIdx === -1) return;
+        let nextIdx = null;
+        switch (e.key) {
+          case 'ArrowRight':
+          case 'ArrowDown':
+            nextIdx = (currentIdx + 1) % TAB_IDS.length;
+            break;
+          case 'ArrowLeft':
+          case 'ArrowUp':
+            nextIdx = (currentIdx - 1 + TAB_IDS.length) % TAB_IDS.length;
+            break;
+          case 'Home':
+            nextIdx = 0;
+            break;
+          case 'End':
+            nextIdx = TAB_IDS.length - 1;
+            break;
+        }
+        if (nextIdx !== null) {
+          e.preventDefault();
+          switchTab(TAB_IDS[nextIdx]);
+        }
+      });
+    }
+
     /* ===== ENERGY CONVERTER ===== */
     function convertKjToKcal(kj) { return kj / 4.184; }
     function convertKcalToKj(kcal) { return kcal * 4.184; }
@@ -724,11 +772,21 @@
         if (updating) return;
         const val = parseFloat(this.value);
         if (isNaN(val) || this.value.trim() === '') {
+          this.classList.remove('error');
           updating = true;
           inputKcal.value = '';
           updating = false;
           return;
         }
+        if (val < 0) {
+          // Negative energy has no physical meaning — reject and flag the field.
+          this.classList.add('error');
+          updating = true;
+          inputKcal.value = '';
+          updating = false;
+          return;
+        }
+        this.classList.remove('error');
         updating = true;
         inputKcal.value = convertKjToKcal(val).toFixed(2);
         updating = false;
@@ -738,11 +796,20 @@
         if (updating) return;
         const val = parseFloat(this.value);
         if (isNaN(val) || this.value.trim() === '') {
+          this.classList.remove('error');
           updating = true;
           inputKj.value = '';
           updating = false;
           return;
         }
+        if (val < 0) {
+          this.classList.add('error');
+          updating = true;
+          inputKj.value = '';
+          updating = false;
+          return;
+        }
+        this.classList.remove('error');
         updating = true;
         inputKj.value = convertKcalToKj(val).toFixed(2);
         updating = false;
@@ -751,6 +818,12 @@
 
     /* ===== COUNTER ===== */
     const COUNTER_KEY = 'toolbox_counter';
+    const COUNTER = {
+      LONG_PRESS_DELAY: 450,      // ms before auto-repeat kicks in
+      LONG_PRESS_INTERVAL: 90,    // ms between auto-repeat ticks
+      ACCEL_TICKS: 8,             // double the step every N ticks
+      MAX_STEP: 100               // cap on the auto-repeat step
+    };
     let counterState = { value: 0 };
     let longPressTimer = null;
     let longPressInterval = null;
@@ -793,9 +866,9 @@
           longPressInterval = setInterval(() => {
             actionFn();
             ticks++;
-            if (ticks % 8 === 0) longPressStep = Math.min(longPressStep * 2, 100);
-          }, 90);
-        }, 450);
+            if (ticks % COUNTER.ACCEL_TICKS === 0) longPressStep = Math.min(longPressStep * 2, COUNTER.MAX_STEP);
+          }, COUNTER.LONG_PRESS_INTERVAL);
+        }, COUNTER.LONG_PRESS_DELAY);
       }
 
       function stopLongPress() {
@@ -817,6 +890,36 @@
       btnMinus.addEventListener('pointercancel', stopLongPress);
 
       btnReset.addEventListener('click', resetCounter);
+
+      // Keyboard shortcuts (only active while the counter tab is visible and
+      // the user isn't typing in some other control).
+      document.addEventListener('keydown', function(e) {
+        const counterPage = document.getElementById('page-counter');
+        if (!counterPage || !counterPage.classList.contains('active')) return;
+        const tag = (e.target.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
+        switch (e.key) {
+          case '+':
+          case 'ArrowUp':
+            e.preventDefault();
+            updateCounter(1);
+            break;
+          case '-':
+          case 'ArrowDown':
+            e.preventDefault();
+            updateCounter(-1);
+            break;
+          case ' ':
+            e.preventDefault();
+            updateCounter(1);
+            break;
+          case 'r':
+          case 'R':
+            e.preventDefault();
+            resetCounter();
+            break;
+        }
+      });
     }
 
     /* ===== PRICE CALCULATOR ===== */
@@ -832,15 +935,27 @@
       return item.totalPrice / totalWeight;
     }
 
-    function findCheapestInGroup(items) {
-      if (items.length === 0) return [];
-      // Only compare items that have a valid unit price; invalid ones never count.
-      const priced = items
-        .map(item => ({ id: item.id, unitPrice: calcUnitPrice(item) }))
-        .filter(w => w.unitPrice !== null && w.unitPrice > 0);
+    const PRICE_EPSILON = 1e-9;
+
+    // Briefly flag an input as invalid so the user sees *why* nothing happened.
+    function flagInputError(el) {
+      if (!el) return;
+      el.classList.add('error');
+      clearTimeout(el._errorTimer);
+      el._errorTimer = setTimeout(() => el.classList.remove('error'), 2000);
+    }
+
+    // Compute { id, up } for every item in one pass so downstream code
+    // (cheapest detection, display, summary) can reuse the results.
+    function computeUnitPrices(items) {
+      return items.map(item => ({ id: item.id, up: calcUnitPrice(item) }));
+    }
+
+    function findCheapestInGroup(unitPrices) {
+      const priced = unitPrices.filter(w => w.up !== null && w.up > 0);
       if (priced.length === 0) return [];
-      const minPrice = Math.min(...priced.map(w => w.unitPrice));
-      return priced.filter(w => w.unitPrice === minPrice).map(w => w.id);
+      const minPrice = Math.min(...priced.map(w => w.up));
+      return priced.filter(w => Math.abs(w.up - minPrice) < PRICE_EPSILON).map(w => w.id);
     }
 
     function saveGroups() {
@@ -881,7 +996,17 @@
     }
 
     function deleteGroup(groupId) {
+      const group = groups.find(g => g.id === groupId);
+      if (!group) return;
+      const itemCount = group.items.length;
+      const detail = itemCount > 0 ? `（含 ${itemCount} 件商品）` : '';
+      if (!confirm(`确定要删除对比组「${group.name || '未命名组'}」${detail}吗？此操作不可撤销。`)) return;
       groups = groups.filter(g => g.id !== groupId);
+      // If the item being edited lived in this group, bail out of edit mode.
+      if (editingGroupId === groupId) {
+        editingId = null;
+        editingGroupId = null;
+      }
       saveGroups();
       renderPriceList();
     }
@@ -899,31 +1024,39 @@
       };
       group.items.push(item);
       saveGroups();
-      renderPriceList();
+      renderGroup(group);
     }
 
     function deleteItemFromGroup(groupId, itemId) {
       const group = groups.find(g => g.id === groupId);
       if (!group) return;
       group.items = group.items.filter(i => i.id !== itemId);
+      if (editingGroupId === groupId && editingId === itemId) {
+        editingId = null;
+        editingGroupId = null;
+      }
       saveGroups();
-      renderPriceList();
+      renderGroup(group);
     }
 
     function startEditItem(groupId, itemId) {
       editingGroupId = groupId;
       editingId = itemId;
-      renderPriceList();
+      const group = groups.find(g => g.id === groupId);
+      if (group) renderGroup(group);
     }
 
     function cancelEdit() {
+      const prevGroupId = editingGroupId;
       editingId = null;
       editingGroupId = null;
-      renderPriceList();
+      if (prevGroupId != null) {
+        const group = groups.find(g => g.id === prevGroupId);
+        if (group) renderGroup(group);
+      }
     }
 
-    function saveEditItem(groupId, itemId) {
-      const form = document.getElementById('edit-form-' + itemId);
+    function saveEditItem(form, groupId, itemId) {
       const nameEl = form.querySelector('.edit-name');
       const uwEl = form.querySelector('.edit-unit-weight');
       const psEl = form.querySelector('.edit-pack-size');
@@ -932,7 +1065,10 @@
 
       const unitWeight = parseFloat(uwEl.value);
       const totalPrice = parseFloat(tpEl.value);
-      if (isNaN(unitWeight) || unitWeight <= 0 || isNaN(totalPrice) || totalPrice <= 0) return;
+      let invalid = false;
+      if (isNaN(unitWeight) || unitWeight <= 0) { flagInputError(uwEl); invalid = true; }
+      if (isNaN(totalPrice) || totalPrice <= 0) { flagInputError(tpEl); invalid = true; }
+      if (invalid) return;
 
       const group = groups.find(g => g.id === groupId);
       if (!group) return;
@@ -947,7 +1083,117 @@
       editingId = null;
       editingGroupId = null;
       saveGroups();
-      renderPriceList();
+      renderGroup(group);
+    }
+
+    // Build the summary + items HTML for a single group. Shared by the full
+    // list render and the per-group partial update so they never diverge.
+    function renderGroupContent(group) {
+      const unitPrices = computeUnitPrices(group.items);
+      const cheapestIds = findCheapestInGroup(unitPrices);
+      const upById = new Map(unitPrices.map(w => [w.id, w.up]));
+
+      const itemsHtml = group.items.length === 0
+        ? '<div class="group-empty">该组暂无商品，请在下方表单中添加</div>'
+        : group.items.map(item => {
+            const up = upById.get(item.id);
+            const isCheapest = cheapestIds.includes(item.id);
+            const totalWeight = item.unitWeight * item.packSize * item.packCount;
+            const isEditing = editingId === item.id && editingGroupId === group.id;
+
+            let cardClass = 'item-card';
+            if (isCheapest && group.items.length > 1) cardClass += ' cheapest';
+            const cheapestBadge = isCheapest && group.items.length > 1 ? '<span class="item-cheapest-badge">最划算 ✓</span>' : '';
+
+            let body = '';
+            if (isEditing) {
+              body = `<div class="item-card-inner">
+                  <div class="item-info">
+                    <div class="item-name">${escHtml(item.name)}${cheapestBadge}</div>
+                    <div class="item-spec">${item.unitWeight}g × ${item.packSize}件 × ${item.packCount}套</div>
+                  </div>
+                </div>
+                <form class="item-edit-form" data-group-id="${group.id}" data-item-id="${item.id}">
+                  <div class="form-field full-width">
+                    <label>商品名称</label>
+                    <input class="input edit-name" type="text" value="${escHtml(item.name)}" aria-label="商品名称">
+                  </div>
+                  <div class="form-field">
+                    <label>单品重量 (g)</label>
+                    <input class="input edit-unit-weight" type="number" min="0.01" step="0.01" value="${item.unitWeight}" required aria-label="单品重量，单位克">
+                  </div>
+                  <div class="form-field">
+                    <label>套装内数量</label>
+                    <input class="input edit-pack-size" type="number" min="1" step="1" value="${item.packSize}" aria-label="套装内数量">
+                  </div>
+                  <div class="form-field">
+                    <label>套装数量</label>
+                    <input class="input edit-pack-count" type="number" min="1" step="1" value="${item.packCount}" aria-label="套装数量">
+                  </div>
+                  <div class="form-field">
+                    <label>总价 (元)</label>
+                    <input class="input edit-total-price" type="number" min="0.01" step="0.01" value="${item.totalPrice}" required aria-label="总价，单位元">
+                  </div>
+                  <div class="item-edit-actions">
+                    <button type="button" class="btn-ghost" data-action="cancel-edit">取消</button>
+                    <button type="submit" class="btn-primary" style="font-size:var(--text-sm);padding:var(--space-1) var(--space-4)">保存</button>
+                  </div>
+                </form>`;
+            } else {
+              body = `<div class="item-card-inner">
+                  <div class="item-info">
+                    <div class="item-name">${escHtml(item.name)}${cheapestBadge}</div>
+                    <div class="item-spec">${item.unitWeight}g × ${item.packSize}件 × ${item.packCount}套</div>
+                  </div>
+                  <div class="item-meta">
+                    <div class="item-total-price">¥${item.totalPrice.toFixed(2)} 元</div>
+                    <div class="item-total-weight">${totalWeight.toFixed(1)} g</div>
+                    <div class="item-unit-price">${up !== null ? up.toFixed(4) : '--'} 元/g</div>
+                    <div class="item-unit-price-100">≈ ${up !== null ? (up * 100).toFixed(2) : '--'} 元/100g</div>
+                  </div>
+                </div>
+                <div class="item-actions">
+                  <button class="btn-ghost" data-action="edit" data-group-id="${group.id}" data-item-id="${item.id}" aria-label="编辑">编辑</button>
+                  <button class="btn-ghost btn-delete" data-action="delete-item" data-group-id="${group.id}" data-item-id="${item.id}" aria-label="删除">删除</button>
+                </div>`;
+            }
+            return '<div class="' + cardClass + '">' + body + '</div>';
+          }).join('');
+
+      const summaryHtml = group.items.length > 0 ? (() => {
+        const priced = unitPrices.filter(w => w.up !== null && w.up > 0);
+        const prices = group.items.map(i => i.totalPrice);
+        const cheapestPrice = priced.length > 0 ? Math.min(...priced.map(w => w.up)) : null;
+        const maxPrice = priced.length > 0 ? Math.max(...priced.map(w => w.up)) : null;
+        let percentStr = '--';
+        if (cheapestPrice !== null && maxPrice !== null && maxPrice > 0) {
+          percentStr = ((maxPrice - cheapestPrice) / maxPrice * 100).toFixed(1) + '%';
+        }
+        return '<div class="group-summary">共 ' + group.items.length + ' 件商品 · 价格区间 ¥' +
+          Math.min(...prices).toFixed(2) + ' ~ ¥' + Math.max(...prices).toFixed(2) +
+          ' · 最划算比最贵便宜 ' + percentStr + '</div>';
+      })() : '';
+
+      return { summaryHtml, itemsHtml };
+    }
+
+    // Re-render just one group in place — preserves the add-form inputs and
+    // the scroll position of the rest of the page. Falls back to a full
+    // render if the group's card isn't in the DOM yet.
+    function renderGroup(group) {
+      const card = document.querySelector('.group-card[data-group-id="' + group.id + '"]');
+      if (!card) { renderPriceList(); return; }
+      const { summaryHtml, itemsHtml } = renderGroupContent(group);
+
+      const oldSummary = card.querySelector(':scope > .group-summary');
+      if (oldSummary) oldSummary.remove();
+      if (summaryHtml) {
+        const header = card.querySelector(':scope > .group-header');
+        if (header) header.insertAdjacentHTML('afterend', summaryHtml);
+      }
+
+      const itemsDiv = card.querySelector(':scope > .group-items');
+      if (itemsDiv) itemsDiv.innerHTML = itemsHtml;
     }
 
     function renderPriceList() {
@@ -962,158 +1208,101 @@
       empty.style.display = 'none';
 
       list.innerHTML = groups.map(group => {
-        const cheapestIds = findCheapestInGroup(group.items);
-        const itemsHtml = group.items.length === 0
-          ? '<div class="group-empty">该组暂无商品，请在下方表单中添加</div>'
-          : group.items.map(item => {
-              const up = calcUnitPrice(item);
-              const isCheapest = cheapestIds.includes(item.id);
-              const totalWeight = item.unitWeight * item.packSize * item.packCount;
-              const isEditing = editingId === item.id && editingGroupId === group.id;
-
-              let cardClass = 'item-card';
-              if (isCheapest && group.items.length > 1) cardClass += ' cheapest';
-
-              let body = '';
-              if (isEditing) {
-                body = `<div class="item-card-inner">
-                    <div class="item-info">
-                      <div class="item-name">${escHtml(item.name)}${isCheapest && group.items.length > 1 ? '<span class="item-cheapest-badge">最划算 ✓</span>' : ''}</div>
-                      <div class="item-spec">${item.unitWeight}g × ${item.packSize}件 × ${item.packCount}套</div>
-                    </div>
-                  </div>
-                  <form class="item-edit-form" id="edit-form-${item.id}" onsubmit="event.preventDefault(); saveEditItem(${group.id}, ${item.id});">
-                    <div class="form-field full-width">
-                      <label>商品名称</label>
-                      <input class="input edit-name" type="text" value="${escHtml(item.name)}">
-                    </div>
-                    <div class="form-field">
-                      <label>单品重量 (g)</label>
-                      <input class="input edit-unit-weight" type="number" min="0.01" step="0.01" value="${item.unitWeight}" required>
-                    </div>
-                    <div class="form-field">
-                      <label>套装内数量</label>
-                      <input class="input edit-pack-size" type="number" min="1" step="1" value="${item.packSize}">
-                    </div>
-                    <div class="form-field">
-                      <label>套装数量</label>
-                      <input class="input edit-pack-count" type="number" min="1" step="1" value="${item.packCount}">
-                    </div>
-                    <div class="form-field">
-                      <label>总价 (元)</label>
-                      <input class="input edit-total-price" type="number" min="0.01" step="0.01" value="${item.totalPrice}" required>
-                    </div>
-                    <div class="item-edit-actions">
-                      <button type="button" class="btn-ghost" onclick="cancelEdit()">取消</button>
-                      <button type="submit" class="btn-primary" style="font-size:var(--text-sm);padding:var(--space-1) var(--space-4)">保存</button>
-                    </div>
-                  </form>`;
-              } else {
-                body = `<div class="item-card-inner">
-                    <div class="item-info">
-                      <div class="item-name">${escHtml(item.name)}${isCheapest && group.items.length > 1 ? '<span class="item-cheapest-badge">最划算 ✓</span>' : ''}</div>
-                      <div class="item-spec">${item.unitWeight}g × ${item.packSize}件 × ${item.packCount}套</div>
-                    </div>
-                    <div class="item-meta">
-                      <div class="item-total-price">¥${item.totalPrice.toFixed(2)} 元</div>
-                      <div class="item-total-weight">${totalWeight.toFixed(1)} g</div>
-                      <div class="item-unit-price">${up !== null ? up.toFixed(4) : '--'} 元/g</div>
-                      <div class="item-unit-price-100">≈ ${up !== null ? (up * 100).toFixed(2) : '--'} 元/100g</div>
-                    </div>
-                  </div>
-                  <div class="item-actions">
-                    <button class="btn-ghost" onclick="startEditItem(${group.id}, ${item.id})" aria-label="编辑">编辑</button>
-                    <button class="btn-ghost btn-delete" onclick="deleteItemFromGroup(${group.id}, ${item.id})" aria-label="删除">删除</button>
-                  </div>`;
-              }
-              return '<div class="' + cardClass + '">' + body + '</div>';
-            }).join('');
-
-        const summaryHtml = group.items.length > 0 ? (() => {
-          const prices = group.items.map(i => i.totalPrice);
-          const cheapestItems = group.items.filter(i => cheapestIds.includes(i.id));
-          const cheapestPrice = cheapestItems.length > 0 ? calcUnitPrice(cheapestItems[0]) : null;
-          const pricedItems = group.items.filter(i => calcUnitPrice(i) !== null);
-          const maxPrice = pricedItems.length > 0
-            ? Math.max(...pricedItems.map(i => calcUnitPrice(i)))
-            : null;
-          let percentStr = '--';
-          if (cheapestPrice !== null && maxPrice !== null && maxPrice > 0) {
-            percentStr = ((maxPrice - cheapestPrice) / maxPrice * 100).toFixed(1) + '%';
-          }
-          return '<div class="group-summary">共 ' + group.items.length + ' 件商品 · 价格区间 ¥' +
-            Math.min(...prices).toFixed(2) + ' ~ ¥' + Math.max(...prices).toFixed(2) +
-            ' · 最划算比最贵便宜 ' + percentStr + '</div>';
-        })() : '';
-
-        const addFormHtml = `<div class="group-add-form">
-          <form class="group-add-item-form" id="add-form-${group.id}" novalidate>
-            <div class="group-add-row">
-              <input class="input" type="text" placeholder="商品名称" data-field="name" style="min-width:120px">
-              <input class="input" type="number" min="0.01" step="0.01" placeholder="单品重量(g) *" data-field="unitWeight" style="min-width:100px" required>
-              <input class="input" type="number" min="1" step="1" placeholder="件数" data-field="packSize" value="1" style="min-width:60px">
-              <input class="input" type="number" min="1" step="1" placeholder="套数" data-field="packCount" value="1" style="min-width:60px">
-              <input class="input" type="number" min="0.01" step="0.01" placeholder="总价(元) *" data-field="totalPrice" style="min-width:100px" required>
-              <button type="submit" class="btn-primary" style="font-size:var(--text-xs);padding:var(--space-2) var(--space-3);white-space:nowrap">添加</button>
-            </div>
-          </form>
-        </div>`;
-
-        return `<div class="group-card">
+        const { summaryHtml, itemsHtml } = renderGroupContent(group);
+        return `<div class="group-card" data-group-id="${group.id}">
           <div class="group-header">
             <h2 class="group-name">${escHtml(group.name) || '未命名组'}</h2>
-            <button class="btn-ghost btn-delete" style="font-size:var(--text-xs);padding:var(--space-1) var(--space-3)" onclick="deleteGroup(${group.id})" aria-label="删除组">删除组</button>
+            <button class="btn-ghost btn-delete" style="font-size:var(--text-xs);padding:var(--space-1) var(--space-3)" data-action="delete-group" data-group-id="${group.id}" aria-label="删除组">删除组</button>
           </div>
           ${summaryHtml}
           <div class="group-items">${itemsHtml}</div>
-          ${addFormHtml}
+          <div class="group-add-form">
+            <form class="group-add-item-form" data-group-id="${group.id}" novalidate>
+              <div class="group-add-row">
+                <input class="input" type="text" placeholder="商品名称" data-field="name" aria-label="商品名称" style="min-width:120px">
+                <input class="input" type="number" min="0.01" step="0.01" placeholder="单品重量(g) *" data-field="unitWeight" aria-label="单品重量，单位克" style="min-width:100px" required>
+                <input class="input" type="number" min="1" step="1" placeholder="件数" data-field="packSize" value="1" aria-label="套装内数量" style="min-width:60px">
+                <input class="input" type="number" min="1" step="1" placeholder="套数" data-field="packCount" value="1" aria-label="套装数量" style="min-width:60px">
+                <input class="input" type="number" min="0.01" step="0.01" placeholder="总价(元) *" data-field="totalPrice" aria-label="总价，单位元" style="min-width:100px" required>
+                <button type="submit" class="btn-primary" style="font-size:var(--text-xs);padding:var(--space-2) var(--space-3);white-space:nowrap">添加</button>
+              </div>
+            </form>
+          </div>
         </div>`;
       }).join('');
+    }
 
-      // Bind add-to-group form handlers
-      groups.forEach(group => {
-        const form = document.getElementById('add-form-' + group.id);
-        if (!form) return;
-        form.addEventListener('submit', function(e) {
-          e.preventDefault();
-          const unitWeight = parseFloat(form.querySelector('[data-field="unitWeight"]').value);
-          const totalPrice = parseFloat(form.querySelector('[data-field="totalPrice"]').value);
-          if (isNaN(unitWeight) || unitWeight <= 0 || isNaN(totalPrice) || totalPrice <= 0) {
-            return;
-          }
-          const formData = {
-            name: form.querySelector('[data-field="name"]').value.trim(),
-            unitWeight: unitWeight,
-            packSize: form.querySelector('[data-field="packSize"]').value,
-            packCount: form.querySelector('[data-field="packCount"]').value,
-            totalPrice: totalPrice
-          };
-          addItemToGroup(group.id, formData);
-          form.reset();
-          form.querySelector('[data-field="packSize"]').value = '1';
-          form.querySelector('[data-field="packCount"]').value = '1';
-        });
-      });
+    function handleAddSubmit(form, groupId) {
+      const uwEl = form.querySelector('[data-field="unitWeight"]');
+      const tpEl = form.querySelector('[data-field="totalPrice"]');
+      const unitWeight = parseFloat(uwEl.value);
+      const totalPrice = parseFloat(tpEl.value);
+      let invalid = false;
+      if (isNaN(unitWeight) || unitWeight <= 0) { flagInputError(uwEl); invalid = true; }
+      if (isNaN(totalPrice) || totalPrice <= 0) { flagInputError(tpEl); invalid = true; }
+      if (invalid) return;
+      const formData = {
+        name: form.querySelector('[data-field="name"]').value.trim(),
+        unitWeight: unitWeight,
+        packSize: form.querySelector('[data-field="packSize"]').value,
+        packCount: form.querySelector('[data-field="packCount"]').value,
+        totalPrice: totalPrice
+      };
+      addItemToGroup(groupId, formData);
+      form.reset();
+      form.querySelector('[data-field="packSize"]').value = '1';
+      form.querySelector('[data-field="packCount"]').value = '1';
     }
 
     function escHtml(str) {
       const div = document.createElement('div');
-      div.textContent = str;
-      return div.innerHTML;
+      div.textContent = str == null ? '' : String(str);
+      // innerHTML escapes < > & but NOT quotes — escape them so values are safe
+      // inside double-quoted HTML attributes (e.g. value="${escHtml(name)}").
+      return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     function initPriceCalculator() {
       loadGroups();
       renderPriceList();
 
+      const list = document.getElementById('price-list');
+
+      // Single delegated click handler for every action button inside the list.
+      list.addEventListener('click', function(e) {
+        const btn = e.target.closest('[data-action]');
+        if (!btn || !list.contains(btn)) return;
+        const action = btn.dataset.action;
+        const groupId = parseInt(btn.dataset.groupId, 10);
+        const itemId = parseInt(btn.dataset.itemId, 10);
+        if (action === 'edit') startEditItem(groupId, itemId);
+        else if (action === 'delete-item') deleteItemFromGroup(groupId, itemId);
+        else if (action === 'cancel-edit') cancelEdit();
+        else if (action === 'delete-group') deleteGroup(groupId);
+      });
+
+      // Single delegated submit handler for both the add-item and edit-item forms.
+      list.addEventListener('submit', function(e) {
+        const form = e.target;
+        if (!form.matches('form')) return;
+        if (form.classList.contains('group-add-item-form')) {
+          e.preventDefault();
+          handleAddSubmit(form, parseInt(form.dataset.groupId, 10));
+        } else if (form.classList.contains('item-edit-form')) {
+          e.preventDefault();
+          saveEditItem(form, parseInt(form.dataset.groupId, 10), parseInt(form.dataset.itemId, 10));
+        }
+      });
+
       const createGroupForm = document.getElementById('create-group-form');
       if (createGroupForm) {
         createGroupForm.addEventListener('submit', function(e) {
           e.preventDefault();
-          const name = document.getElementById('new-group-name').value.trim();
-          if (!name) return;
+          const nameInput = document.getElementById('new-group-name');
+          const name = nameInput.value.trim();
+          if (!name) { flagInputError(nameInput); return; }
           addGroup(name);
-          document.getElementById('new-group-name').value = '';
+          nameInput.value = '';
         });
       }
     }
@@ -1223,6 +1412,7 @@
     /* ===== INIT ===== */
     document.addEventListener('DOMContentLoaded', () => {
       setActiveTab(restoreTab());
+      initTabKeyboard();
       window.addEventListener('hashchange', () => {
         const hash = location.hash.replace('#', '');
         if (TAB_IDS.includes(hash)) setActiveTab(hash);
