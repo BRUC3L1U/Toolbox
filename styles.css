@@ -2,6 +2,7 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { -webkit-font-smoothing: antialiased; scroll-behavior: smooth; }
 body {
+  min-height: 100vh; /* fallback for engines without dvh */
   min-height: 100dvh;
   font-family: var(--font-body, sans-serif);
   font-size: var(--text-base);
@@ -15,6 +16,8 @@ button { cursor: pointer; background: none; border: none; }
 :focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; border-radius: var(--radius-sm); }
 
 /* ===== DESIGN TOKENS ===== */
+/* Light theme only, by design: no prefers-color-scheme dark variant is
+   planned — do not add one. */
 :root {
   --color-bg: #f7f6f2;
   --color-surface: #f9f8f5;
@@ -42,8 +45,12 @@ button { cursor: pointer; background: none; border: none; }
   --radius-md: 0.5rem;
   --radius-lg: 0.75rem;
   --transition-interactive: 180ms cubic-bezier(0.16, 1, 0.3, 1);
-  --font-display: 'Satoshi', 'Inter', sans-serif;
-  --font-body: 'General Sans', 'Inter', sans-serif;
+  /* Web fonts were dropped on purpose: the fontshare CDN is unreliable in
+     mainland China and Satoshi/General Sans carry no CJK glyphs anyway —
+     this Chinese-first UI renders identically with the system stack and
+     loads instantly. */
+  --font-display: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
@@ -75,13 +82,17 @@ button { cursor: pointer; background: none; border: none; }
 
 .btn-ghost {
   color: var(--color-text-muted);
+  /* rgba fallback: relative color syntax (oklch from …) is unsupported on
+     Chrome <119 / Safari <16.4 / Firefox <128 and the whole declaration is
+     dropped there, which would kill the border entirely. */
+  border: 1px solid rgba(40, 37, 29, 0.15);
   border: 1px solid oklch(from var(--color-text) l c h / 0.15);
   border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-4);
   font-size: var(--text-sm);
   transition: color var(--transition-interactive), border-color var(--transition-interactive);
 }
-.btn-ghost:hover { color: var(--color-text); border-color: oklch(from var(--color-text) l c h / 0.3); }
+.btn-ghost:hover { color: var(--color-text); border-color: rgba(40, 37, 29, 0.3); border-color: oklch(from var(--color-text) l c h / 0.3); }
 
 .input {
   background: var(--color-surface-2);
@@ -98,10 +109,22 @@ button { cursor: pointer; background: none; border: none; }
 
 .card {
   background: var(--color-surface);
+  border: 1px solid rgba(40, 37, 29, 0.08); /* fallback, see .btn-ghost note */
   border: 1px solid oklch(from var(--color-text) l c h / 0.08);
   border-radius: var(--radius-lg);
   padding: var(--space-6);
   box-shadow: var(--shadow-sm);
+}
+
+.noscript-warning {
+  max-width: 640px;
+  margin: var(--space-8) auto;
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--color-error);
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
 }
 
 /* ===== HEADER ===== */
@@ -275,8 +298,21 @@ button { cursor: pointer; background: none; border: none; }
   margin: 0 auto;
 }
 
+/* Create-group card (styles moved out of inline HTML attributes). */
+.create-group-card { margin-bottom: var(--space-6); }
+.create-group-title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  margin-bottom: var(--space-4);
+}
+.create-group-form { display: flex; gap: var(--space-3); }
+.create-group-form .input { flex: 1; }
+.create-group-form .btn-primary { white-space: nowrap; }
+
 .group-card {
   background: var(--color-surface);
+  border: 1px solid rgba(40, 37, 29, 0.08); /* fallback, see .btn-ghost note */
   border: 1px solid oklch(from var(--color-text) l c h / 0.08);
   border-radius: var(--radius-lg);
   padding: var(--space-6);
@@ -298,6 +334,7 @@ button { cursor: pointer; background: none; border: none; }
   font-weight: 600;
   color: var(--color-text);
 }
+.group-header .btn-delete { font-size: var(--text-xs); padding: var(--space-1) var(--space-3); }
 
 .group-summary {
   font-size: var(--text-sm);
@@ -319,9 +356,16 @@ button { cursor: pointer; background: none; border: none; }
   align-items: center;
 }
 .group-add-row .input { font-size: var(--text-sm); padding: var(--space-2); }
+.group-add-row [data-field="name"] { min-width: 120px; }
+.group-add-row [data-field="unitWeight"] { min-width: 100px; }
+.group-add-row [data-field="packSize"],
+.group-add-row [data-field="packCount"] { min-width: 60px; }
+.group-add-row [data-field="totalPrice"] { min-width: 100px; }
+.group-add-row .btn-primary { font-size: var(--text-xs); padding: var(--space-2) var(--space-3); white-space: nowrap; }
 
 .item-card {
   background: var(--color-surface-2);
+  border: 1px solid rgba(40, 37, 29, 0.06); /* fallback, see .btn-ghost note */
   border: 1px solid oklch(from var(--color-text) l c h / 0.06);
   border-radius: var(--radius-md);
   padding: var(--space-4);
@@ -411,6 +455,7 @@ button { cursor: pointer; background: none; border: none; }
   gap: var(--space-2);
   justify-content: flex-end;
 }
+.item-edit-actions .btn-primary { font-size: var(--text-sm); padding: var(--space-1) var(--space-4); }
 
 .price-empty {
   text-align: center;
@@ -436,6 +481,7 @@ button { cursor: pointer; background: none; border: none; }
 .boss-card {
   flex: 1;
   background: var(--color-surface);
+  border: 1px solid rgba(40, 37, 29, 0.08); /* fallback, see .btn-ghost note */
   border: 1px solid oklch(from var(--color-text) l c h / 0.08);
   border-radius: var(--radius-lg);
   padding: var(--space-10) var(--space-8);
@@ -486,11 +532,13 @@ button { cursor: pointer; background: none; border: none; }
 .boss-card { transition: box-shadow var(--transition-interactive), border-color var(--transition-interactive); }
 .boss-card.boss-soon {
   border-color: var(--boss-accent);
+  /* rgba fallback uses the normal-card red; close enough on legacy engines */
+  box-shadow: 0 0 0 3px rgba(184, 50, 50, 0.2), var(--shadow-md);
   box-shadow: 0 0 0 3px oklch(from var(--boss-accent) l c h / 0.2), var(--shadow-md);
 }
 @keyframes bossSpawnPulse {
-  0% { box-shadow: 0 0 0 0 oklch(from var(--color-success) l c h / 0.55); }
-  100% { box-shadow: 0 0 0 22px oklch(from var(--color-success) l c h / 0); }
+  0% { box-shadow: 0 0 0 0 rgba(67, 122, 34, 0.55); box-shadow: 0 0 0 0 oklch(from var(--color-success) l c h / 0.55); }
+  100% { box-shadow: 0 0 0 22px rgba(67, 122, 34, 0); box-shadow: 0 0 0 22px oklch(from var(--color-success) l c h / 0); }
 }
 .boss-card.boss-spawned { animation: bossSpawnPulse 1s ease-out 2; }
 

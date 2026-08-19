@@ -82,6 +82,10 @@ function initTabKeyboard() {
 }
 
 /* ===== ENERGY CONVERTER ===== */
+// Integer output is deliberate: food labels quote whole numbers, so a
+// whole-number result reads cleaner (100 kJ → 24 kcal, not 23.92). This is
+// also why the inputs keep inputmode="numeric" (no decimal point) — do not
+// "fix" either to decimals.
 function convertKjToKcal(kj) { return kj / 4.184; }
 function convertKcalToKj(kcal) { return kcal * 4.184; }
 
@@ -113,17 +117,11 @@ function initEnergyConverter() {
 }
 
 /* ===== COUNTER ===== */
+// A long-press auto-repeat feature (hold +/− to count fast) existed briefly
+// and was deliberately removed in favour of plain taps and keyboard
+// shortcuts. Do not re-add it.
 const COUNTER_KEY = 'toolbox_counter';
-const COUNTER = {
-  LONG_PRESS_DELAY: 450,      // ms before auto-repeat kicks in
-  LONG_PRESS_INTERVAL: 90,    // ms between auto-repeat ticks
-  ACCEL_TICKS: 8,             // double the step every N ticks
-  MAX_STEP: 100               // cap on the auto-repeat step
-};
 let counterState = { value: 0 };
-let longPressTimer = null;
-let longPressInterval = null;
-let longPressStep = 1;
 
 function loadCounter() {
   try {
@@ -147,55 +145,19 @@ function resetCounter() {
 
 function initCounter() {
   loadCounter();
-  const btnPlus = document.getElementById('btn-plus');
-  const btnMinus = document.getElementById('btn-minus');
-  const btnReset = document.getElementById('btn-reset');
+  document.getElementById('btn-plus').addEventListener('click', () => updateCounter(1));
+  document.getElementById('btn-minus').addEventListener('click', () => updateCounter(-1));
+  document.getElementById('btn-reset').addEventListener('click', resetCounter);
 
-  function doPlus() { updateCounter(longPressStep); }
-  function doMinus() { updateCounter(-longPressStep); }
-
-  function startLongPress(actionFn) {
-    // Accelerate: step grows and interval shrinks the longer you hold.
-    longPressStep = 1;
-    longPressTimer = setTimeout(() => {
-      let ticks = 0;
-      longPressInterval = setInterval(() => {
-        actionFn();
-        ticks++;
-        if (ticks % COUNTER.ACCEL_TICKS === 0) longPressStep = Math.min(longPressStep * 2, COUNTER.MAX_STEP);
-      }, COUNTER.LONG_PRESS_INTERVAL);
-    }, COUNTER.LONG_PRESS_DELAY);
-  }
-
-  function stopLongPress() {
-    clearTimeout(longPressTimer);
-    clearInterval(longPressInterval);
-    longPressTimer = null;
-    longPressInterval = null;
-    longPressStep = 1;
-  }
-
-  btnPlus.addEventListener('pointerdown', e => { e.preventDefault(); doPlus(); startLongPress(doPlus); });
-  btnPlus.addEventListener('pointerup', stopLongPress);
-  btnPlus.addEventListener('pointerleave', stopLongPress);
-  btnPlus.addEventListener('pointercancel', stopLongPress);
-
-  btnMinus.addEventListener('pointerdown', e => { e.preventDefault(); doMinus(); startLongPress(doMinus); });
-  btnMinus.addEventListener('pointerup', stopLongPress);
-  btnMinus.addEventListener('pointerleave', stopLongPress);
-  btnMinus.addEventListener('pointercancel', stopLongPress);
-
-  btnReset.addEventListener('click', resetCounter);
-
-  // Keyboard shortcuts (only active while the counter tab is visible and
-  // the user isn't typing in some other control).
   document.addEventListener('keydown', function(e) {
     const counterPage = document.getElementById('page-counter');
     if (!counterPage || !counterPage.classList.contains('active')) return;
-    // Ignore shortcuts when the user is interacting with a form control
-    // (including buttons) so Space / +/- don't trigger both the control
-    // and the shortcut at once.
-    if (e.target.closest('input, textarea, select, button, [contenteditable="true"]')) return;
+    // Text-entry controls own every key, so never steal from them.
+    if (e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    // A focused button only claims Space (it would activate the button *and*
+    // run the shortcut); arrows and R stay live so clicking +/- with the mouse
+    // doesn't kill keyboard control.
+    const onButton = !!e.target.closest('button');
     switch (e.key) {
       case '+':
       case 'ArrowUp':
@@ -208,6 +170,7 @@ function initCounter() {
         updateCounter(-1);
         break;
       case ' ':
+        if (onButton) return;
         e.preventDefault();
         updateCounter(1);
         break;
@@ -221,6 +184,10 @@ function initCounter() {
 }
 
 /* ===== PRICE CALCULATOR ===== */
+// Storage is localStorage-only by design: no import/export, no sync, no
+// backup prompt. On a schema-version mismatch or parse error the data is
+// intentionally reset rather than migrated — this is a single-user personal
+// tool, so simplicity wins over data recovery.
 const STORAGE_VERSION = 1;
 let groups = []; // [{ id, name, items: [...] }]
 let editingId = null;
@@ -279,8 +246,24 @@ function loadGroups() {
   }
 }
 
+// crypto.randomUUID() is restricted to secure contexts, so it's missing when
+// the page is served over plain HTTP on a LAN address (phone → dev server).
+// getRandomValues() has no such restriction, so build a v4 UUID from it.
+function uid() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40; // version 4
+    b[8] = (b[8] & 0x3f) | 0x80; // variant 10
+    const hex = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+    return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) +
+           '-' + hex.slice(16, 20) + '-' + hex.slice(20);
+  }
+  return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
 function addGroup(name) {
-  groups.push({ id: crypto.randomUUID(), name, items: [] });
+  groups.push({ id: uid(), name, items: [] });
   saveGroups();
   renderPriceList();
 }
@@ -305,7 +288,7 @@ function addItemToGroup(groupId, formData) {
   const group = groups.find(g => g.id === groupId);
   if (!group) return;
   const item = {
-    id: crypto.randomUUID(),
+    id: uid(),
     name: formData.name || ('商品 ' + (group.items.length + 1)),
     unitWeight: parseFloat(formData.unitWeight),
     packSize: parseInt(formData.packSize) || 1,
@@ -426,7 +409,7 @@ function renderGroupContent(group) {
               </div>
               <div class="item-edit-actions">
                 <button type="button" class="btn-ghost" data-action="cancel-edit">取消</button>
-                <button type="submit" class="btn-primary" style="font-size:var(--text-sm);padding:var(--space-1) var(--space-4)">保存</button>
+                <button type="submit" class="btn-primary">保存</button>
               </div>
             </form>`;
         } else {
@@ -502,19 +485,19 @@ function renderPriceList() {
     return `<div class="group-card" data-group-id="${group.id}">
       <div class="group-header">
         <h2 class="group-name">${escHtml(group.name) || '未命名组'}</h2>
-        <button class="btn-ghost btn-delete" style="font-size:var(--text-xs);padding:var(--space-1) var(--space-3)" data-action="delete-group" data-group-id="${group.id}" aria-label="删除组">删除组</button>
+        <button class="btn-ghost btn-delete" data-action="delete-group" data-group-id="${group.id}" aria-label="删除组">删除组</button>
       </div>
       ${summaryHtml}
       <div class="group-items">${itemsHtml}</div>
       <div class="group-add-form">
         <form class="group-add-item-form" data-group-id="${group.id}" novalidate>
           <div class="group-add-row">
-            <input class="input" type="text" placeholder="商品名称" data-field="name" aria-label="商品名称" style="min-width:120px">
-            <input class="input" type="number" min="0.01" step="0.01" placeholder="单品重量(g) *" data-field="unitWeight" aria-label="单品重量，单位克" style="min-width:100px" required>
-            <input class="input" type="number" min="1" step="1" placeholder="件数" data-field="packSize" value="1" aria-label="套装内数量" style="min-width:60px">
-            <input class="input" type="number" min="1" step="1" placeholder="套数" data-field="packCount" value="1" aria-label="套装数量" style="min-width:60px">
-            <input class="input" type="number" min="0.01" step="0.01" placeholder="总价(元) *" data-field="totalPrice" aria-label="总价，单位元" style="min-width:100px" required>
-            <button type="submit" class="btn-primary" style="font-size:var(--text-xs);padding:var(--space-2) var(--space-3);white-space:nowrap">添加</button>
+            <input class="input" type="text" placeholder="商品名称" data-field="name" aria-label="商品名称">
+            <input class="input" type="number" min="0.01" step="0.01" placeholder="单品重量(g) *" data-field="unitWeight" aria-label="单品重量，单位克" required>
+            <input class="input" type="number" min="1" step="1" placeholder="件数" data-field="packSize" value="1" aria-label="套装内数量">
+            <input class="input" type="number" min="1" step="1" placeholder="套数" data-field="packCount" value="1" aria-label="套装数量">
+            <input class="input" type="number" min="0.01" step="0.01" placeholder="总价(元) *" data-field="totalPrice" aria-label="总价，单位元" required>
+            <button type="submit" class="btn-primary">添加</button>
           </div>
         </form>
       </div>
@@ -540,8 +523,6 @@ function handleAddSubmit(form, groupId) {
   };
   addItemToGroup(groupId, formData);
   form.reset();
-  form.querySelector('[data-field="packSize"]').value = '1';
-  form.querySelector('[data-field="packCount"]').value = '1';
 }
 
 function escHtml(str) {
@@ -639,6 +620,9 @@ function initBossTimer() {
     cfg.card.classList.add('boss-spawned');
   }
 
+  // Base times and intervals are hardcoded on purpose: this timer tracks one
+  // game's fixed spawn schedule. If the schedule ever changes, edit the base
+  // and interval below — a settings UI is deliberately out of scope.
   const WORLD = {
     key: 'world', title: '世界首领',
     base: new Date('2023-10-27T22:00:00+08:00').getTime(),

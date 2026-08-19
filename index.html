@@ -4,11 +4,18 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Toolbox</title>
+  <meta name="description" content="热量换算、计数器、商品比价、Boss 计时四合一的轻量在线工具箱。">
+  <meta name="theme-color" content="#f7f6f2">
+  <!-- Light theme only, by design (see styles.css). Keeps form controls
+       rendering light even on dark-mode systems. -->
+  <meta name="color-scheme" content="light">
   <link rel="icon" type="image/png" href="favicon.png">
-  <link href="https://api.fontshare.com/v2/css?f[]=satoshi@700,500&f[]=general-sans@400,500,600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <noscript>
+    <p class="noscript-warning">本工具箱需要启用 JavaScript 才能使用。</p>
+  </noscript>
   <!-- ===== HEADER ===== -->
   <header class="header">
     <div class="logo">工具箱</div>
@@ -23,7 +30,7 @@
   <!-- ===== MAIN ===== -->
   <main class="container">
     <!-- Energy Converter -->
-    <section id="page-energy" class="tool-page active" role="tabpanel" aria-labelledby="tab-energy">
+    <section id="page-energy" class="tool-page active" role="tabpanel" aria-labelledby="tab-energy" tabindex="0">
       <div class="card energy-card">
         <h1 class="page-title">热量换算</h1>
         <p class="page-subtitle">千焦（kJ）与千卡（kcal）互换</p>
@@ -49,7 +56,7 @@
     </section>
 
     <!-- Counter -->
-    <section id="page-counter" class="tool-page" role="tabpanel" aria-labelledby="tab-counter">
+    <section id="page-counter" class="tool-page" role="tabpanel" aria-labelledby="tab-counter" tabindex="0">
       <div class="card counter-card">
         <h1 class="page-title">计数器</h1>
         <div class="counter-display" id="counter-value" aria-live="polite">0</div>
@@ -62,17 +69,17 @@
     </section>
 
     <!-- Price Calculator -->
-    <section id="page-price" class="tool-page" role="tabpanel" aria-labelledby="tab-price">
+    <section id="page-price" class="tool-page" role="tabpanel" aria-labelledby="tab-price" tabindex="0">
       <div class="price-card">
         <h1 class="page-title">商品单价对比</h1>
         <p class="page-subtitle">创建对比组，组内商品独立比较，组间互不影响</p>
 
         <!-- Create group -->
-        <div class="card" style="margin-bottom:var(--space-6)">
-          <h2 style="font-family:var(--font-display);font-size:var(--text-lg);font-weight:600;margin-bottom:var(--space-4)">新建对比组</h2>
-          <form id="create-group-form" style="display:flex;gap:var(--space-3)" novalidate>
-            <input id="new-group-name" class="input" type="text" placeholder="如：薯片对比、洗衣液对比" required aria-label="组名称" style="flex:1">
-            <button type="submit" class="btn-primary" style="white-space:nowrap">创建组</button>
+        <div class="card create-group-card">
+          <h2 class="create-group-title">新建对比组</h2>
+          <form id="create-group-form" class="create-group-form" novalidate>
+            <input id="new-group-name" class="input" type="text" placeholder="如：薯片对比、洗衣液对比" required aria-label="组名称">
+            <button type="submit" class="btn-primary">创建组</button>
           </form>
         </div>
 
@@ -92,7 +99,7 @@
     </section>
 
     <!-- Boss Timer -->
-    <section id="page-timer" class="tool-page" role="tabpanel" aria-labelledby="tab-timer">
+    <section id="page-timer" class="tool-page" role="tabpanel" aria-labelledby="tab-timer" tabindex="0">
       <div class="boss-toolbar">
         <h1 class="page-title">Boss 计时</h1>
       </div>
