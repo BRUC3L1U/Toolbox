@@ -2,6 +2,29 @@
 const TAB_IDS = ['energy', 'counter', 'price', 'timer'];
 const ACTIVE_TAB_KEY = 'toolbox_active_tab';
 
+// Pure helpers are kept separate from DOM wiring so the input and persistence
+// contracts can be exercised with Node's built-in test runner.
+function parseNonNegativeFiniteNumber(value) {
+  const text = value == null ? '' : String(value).trim();
+  if (!text) return null;
+  const number = Number(text);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function parsePositiveFiniteNumber(value) {
+  const number = parseNonNegativeFiniteNumber(value);
+  return number !== null && number > 0 ? number : null;
+}
+
+function parsePositiveInteger(value) {
+  const number = parsePositiveFiniteNumber(value);
+  return number !== null && Number.isSafeInteger(number) ? number : null;
+}
+
+function shouldHandleCounterShortcut(counterActive, isTextEntry, isTabControl) {
+  return counterActive && !isTextEntry && !isTabControl;
+}
+
 // Roving tabindex: only the active tab is in the tab order (tabindex="0"),
 // the rest are tabindex="-1" but still reachable via arrow keys.
 function setActiveTab(tabId) {
@@ -76,6 +99,9 @@ function initTabKeyboard() {
     }
     if (nextIdx !== null) {
       e.preventDefault();
+      // The counter also has document-level arrow shortcuts. Stop this tab
+      // navigation event before the newly activated counter can consume it.
+      e.stopPropagation();
       switchTab(TAB_IDS[nextIdx]);
     }
   });
@@ -95,14 +121,14 @@ function initEnergyConverter() {
 
   function bind(source, target, convert) {
     source.addEventListener('input', function() {
-      const val = parseFloat(this.value);
-      if (isNaN(val) || this.value.trim() === '') {
+      const raw = this.value.trim();
+      if (raw === '') {
         this.classList.remove('error');
         target.value = '';
         return;
       }
-      if (val < 0) {
-        // Negative energy has no physical meaning — reject and flag the field.
+      const val = parseNonNegativeFiniteNumber(raw);
+      if (val === null) {
         this.classList.add('error');
         target.value = '';
         return;
@@ -126,7 +152,10 @@ let counterState = { value: 0 };
 function loadCounter() {
   try {
     const raw = localStorage.getItem(COUNTER_KEY);
-    if (raw !== null) counterState.value = parseInt(raw, 10) || 0;
+    if (raw !== null) {
+      const storedValue = Number(raw);
+      counterState.value = Number.isSafeInteger(storedValue) ? storedValue : 0;
+    }
   } catch (e) {}
   document.getElementById('counter-value').textContent = counterState.value;
 }
@@ -151,9 +180,10 @@ function initCounter() {
 
   document.addEventListener('keydown', function(e) {
     const counterPage = document.getElementById('page-counter');
-    if (!counterPage || !counterPage.classList.contains('active')) return;
-    // Text-entry controls own every key, so never steal from them.
-    if (e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    const counterActive = !!counterPage && counterPage.classList.contains('active');
+    const isTextEntry = !!e.target.closest('input, textarea, select, [contenteditable="true"]');
+    const isTabControl = !!e.target.closest('[role="tab"], [role="tablist"]');
+    if (!shouldHandleCounterShortcut(counterActive, isTextEntry, isTabControl)) return;
     // A focused button only claims Space (it would activate the button *and*
     // run the shortcut); arrows and R stay live so clicking +/- with the mouse
     // doesn't kill keyboard control.
@@ -184,14 +214,231 @@ function initCounter() {
 }
 
 /* ===== PRICE CALCULATOR ===== */
-// Storage is localStorage-only by design: no import/export, no sync, no
-// backup prompt. On a schema-version mismatch or parse error the data is
-// intentionally reset rather than migrated — this is a single-user personal
-// tool, so simplicity wins over data recovery.
+// Storage is localStorage-only by design: no import/export or remote backup.
+// Every read is decoded at the boundary, and revisions prevent a stale tab
+// from silently replacing a newer snapshot.
 const STORAGE_VERSION = 1;
+const PRICE_STORAGE_KEY = 'toolbox_price_groups';
+const PRICE_STORAGE_LOCK = 'toolbox-price-groups-write';
+const PRICE_PRESENCE_PREFIX = 'toolbox_price_tab_';
+const PRICE_PRESENCE_TTL_MS = 5000;
 let groups = []; // [{ id, name, items: [...] }]
 let editingId = null;
 let editingGroupId = null;
+let editingBaseRevision = null;
+let groupsRevision = 0;
+let persistedGroupsSnapshot = [];
+let priceStatusTimer = null;
+let priceTabId = null;
+let pricePresenceKey = null;
+let pricePresenceTimer = null;
+const pendingPriceForms = new WeakSet();
+
+function cloneGroups(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function isSafeStoredId(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9-]+$/.test(value);
+}
+
+function normalizeStoredItem(item) {
+  if (!item || typeof item !== 'object' || !isSafeStoredId(item.id)) return null;
+  const unitWeight = parsePositiveFiniteNumber(item.unitWeight);
+  const packSize = parsePositiveInteger(item.packSize);
+  const packCount = parsePositiveInteger(item.packCount);
+  const totalPrice = parsePositiveFiniteNumber(item.totalPrice);
+  if (unitWeight === null || packSize === null || packCount === null || totalPrice === null) return null;
+  return {
+    id: item.id,
+    name: typeof item.name === 'string' ? item.name : '',
+    unitWeight,
+    packSize,
+    packCount,
+    totalPrice,
+  };
+}
+
+function normalizeStoredGroup(group) {
+  if (!group || typeof group !== 'object' || !isSafeStoredId(group.id) || !Array.isArray(group.items)) return null;
+  const items = group.items.map(normalizeStoredItem).filter(Boolean);
+  return {
+    group: {
+      id: group.id,
+      name: typeof group.name === 'string' ? group.name : '',
+      items,
+    },
+    hadInvalidData: items.length !== group.items.length,
+  };
+}
+
+function decodeStoredGroups(raw) {
+  if (!raw) return { groups: [], revision: 0, hadInvalidData: false };
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || parsed.v !== STORAGE_VERSION || !Array.isArray(parsed.groups)) {
+      return { groups: [], revision: 0, hadInvalidData: true };
+    }
+    const normalized = parsed.groups.map(normalizeStoredGroup);
+    const groups = normalized.filter(Boolean).map(result => result.group);
+    const revisionValid = parsed.revision == null ||
+      (Number.isSafeInteger(parsed.revision) && parsed.revision >= 0);
+    return {
+      groups,
+      revision: revisionValid && parsed.revision != null ? parsed.revision : 0,
+      hadInvalidData: !revisionValid || groups.length !== parsed.groups.length ||
+        normalized.some(result => result && result.hadInvalidData),
+    };
+  } catch (e) {
+    return { groups: [], revision: 0, hadInvalidData: true };
+  }
+}
+
+function showPriceStatus(message) {
+  const status = document.getElementById('price-storage-status');
+  if (!status) return;
+  clearTimeout(priceStatusTimer);
+  status.textContent = message;
+  status.hidden = !message;
+  if (message) {
+    priceStatusTimer = setTimeout(() => {
+      status.hidden = true;
+      status.textContent = '';
+    }, 6000);
+  }
+}
+
+function readStoredGroups() {
+  try {
+    return { ...decodeStoredGroups(localStorage.getItem(PRICE_STORAGE_KEY)), storageError: false };
+  } catch (e) {
+    return {
+      groups: cloneGroups(persistedGroupsSnapshot),
+      revision: groupsRevision,
+      hadInvalidData: false,
+      storageError: true,
+    };
+  }
+}
+
+function applyStoredGroups(state) {
+  groups = cloneGroups(state.groups);
+  groupsRevision = state.revision;
+  persistedGroupsSnapshot = cloneGroups(state.groups);
+}
+
+function runWithPriceStorageLock(lockManager, task, fallback) {
+  if (lockManager && typeof lockManager.request === 'function') {
+    return lockManager.request(PRICE_STORAGE_LOCK, task);
+  }
+  return fallback ? fallback(task) : Promise.resolve().then(task);
+}
+
+function initPricePresence() {
+  if (pricePresenceKey) return;
+  priceTabId = uid();
+  pricePresenceKey = PRICE_PRESENCE_PREFIX + priceTabId;
+  const touch = () => {
+    try { localStorage.setItem(pricePresenceKey, String(Date.now())); } catch (e) {}
+  };
+  touch();
+  pricePresenceTimer = setInterval(touch, 2000);
+  window.addEventListener('pagehide', () => {
+    clearInterval(pricePresenceTimer);
+    try { localStorage.removeItem(pricePresenceKey); } catch (e) {}
+  }, { once: true });
+}
+
+function hasFreshPricePresence(entries, ownKey, now) {
+  return entries.some(([key, value]) => {
+    if (!key.startsWith(PRICE_PRESENCE_PREFIX) || key === ownKey) return false;
+    const timestamp = Number(value);
+    const age = now - timestamp;
+    return Number.isFinite(timestamp) && age >= 0 && age < PRICE_PRESENCE_TTL_MS;
+  });
+}
+
+function hasAnotherPriceTab() {
+  initPricePresence();
+  try {
+    const now = Date.now();
+    localStorage.setItem(pricePresenceKey, String(now));
+    const entries = [];
+    const invalidPresenceKeys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      const value = localStorage.getItem(key);
+      entries.push([key, value]);
+      if (key.startsWith(PRICE_PRESENCE_PREFIX) && key !== pricePresenceKey) {
+        const timestamp = Number(value);
+        const age = now - timestamp;
+        if (!Number.isFinite(timestamp) || age < 0 || age >= PRICE_PRESENCE_TTL_MS) {
+          invalidPresenceKeys.push(key);
+        }
+      }
+    }
+    invalidPresenceKeys.forEach(key => localStorage.removeItem(key));
+    return hasFreshPricePresence(entries, pricePresenceKey, now);
+  } catch (e) {
+    return false;
+  }
+}
+
+async function runFallbackPriceWrite(task) {
+  // Give a simultaneously opened tab time to publish its distinct presence key.
+  await new Promise(resolve => setTimeout(resolve, 100));
+  if (hasAnotherPriceTab()) {
+    showPriceStatus('当前浏览器不支持跨标签写入锁；请关闭其他工具箱标签页后重试。');
+    return false;
+  }
+  return task();
+}
+
+function withPriceStorageLock(task) {
+  const lockManager = typeof navigator !== 'undefined' ? navigator.locks : null;
+  return runWithPriceStorageLock(lockManager, task, runFallbackPriceWrite);
+}
+
+function hasEditConflict(baseRevision, latestRevision) {
+  return baseRevision !== latestRevision;
+}
+
+function hasGroupSnapshotConflict(expectedGroup, latestGroup) {
+  return !expectedGroup || !latestGroup || JSON.stringify(expectedGroup) !== JSON.stringify(latestGroup);
+}
+
+async function runFormSubmissionOnce(form, task) {
+  if (pendingPriceForms.has(form)) return false;
+  pendingPriceForms.add(form);
+  const buttons = Array.from(form.querySelectorAll('button[type="submit"], input[type="submit"]'));
+  const disabledStates = buttons.map(button => button.disabled);
+  buttons.forEach(button => { button.disabled = true; });
+  form.setAttribute('aria-busy', 'true');
+  try {
+    return await task();
+  } finally {
+    pendingPriceForms.delete(form);
+    buttons.forEach((button, index) => { button.disabled = disabledStates[index]; });
+    form.removeAttribute('aria-busy');
+  }
+}
+
+async function mutateGroups(mutator) {
+  return withPriceStorageLock(async () => {
+    const latest = readStoredGroups();
+    if (!latest.storageError && latest.revision !== groupsRevision) {
+      applyStoredGroups(latest);
+      editingId = null;
+      editingGroupId = null;
+      editingBaseRevision = null;
+      renderPriceList();
+      showPriceStatus('已同步其他标签页的修改。');
+    }
+    if (mutator() === false) return false;
+    return saveGroups();
+  });
+}
 
 function calcUnitPrice(item) {
   const totalWeight = item.unitWeight * item.packSize * item.packCount;
@@ -223,27 +470,40 @@ function findCheapestInGroup(unitPrices) {
 }
 
 function saveGroups() {
+  const latest = readStoredGroups();
+  if (!latest.storageError && latest.revision !== groupsRevision) {
+    applyStoredGroups(latest);
+    editingId = null;
+    editingGroupId = null;
+    editingBaseRevision = null;
+    renderPriceList();
+    showPriceStatus('检测到其他标签页的新修改，已保留最新数据；请重试刚才的操作。');
+    return false;
+  }
+
+  const nextRevision = groupsRevision + 1;
   try {
-    localStorage.setItem('toolbox_price_groups', JSON.stringify({ v: STORAGE_VERSION, groups }));
-  } catch (e) {}
+    localStorage.setItem(PRICE_STORAGE_KEY, JSON.stringify({
+      v: STORAGE_VERSION,
+      revision: nextRevision,
+      groups,
+    }));
+    groupsRevision = nextRevision;
+    persistedGroupsSnapshot = cloneGroups(groups);
+    return true;
+  } catch (e) {
+    groups = cloneGroups(persistedGroupsSnapshot);
+    renderPriceList();
+    showPriceStatus('无法保存到浏览器，本次修改未保留。');
+    return false;
+  }
 }
 
 function loadGroups() {
-  try {
-    const raw = localStorage.getItem('toolbox_price_groups');
-    if (!raw) return;
-    const parsed = JSON.parse(raw);
-    // Version guard: reset on unknown / legacy schema.
-    if (parsed.v !== STORAGE_VERSION) {
-      groups = [];
-      return;
-    }
-    if (parsed.groups && Array.isArray(parsed.groups)) {
-      groups = parsed.groups;
-    }
-  } catch (e) {
-    groups = [];
-  }
+  const stored = readStoredGroups();
+  applyStoredGroups(stored);
+  if (stored.storageError) showPriceStatus('浏览器存储不可用，本页修改可能无法保留。');
+  else if (stored.hadInvalidData) showPriceStatus('部分本地数据格式无效，已安全忽略。');
 }
 
 // crypto.randomUUID() is restricted to secure contexts, so it's missing when
@@ -262,101 +522,152 @@ function uid() {
   return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
 }
 
-function addGroup(name) {
-  groups.push({ id: uid(), name, items: [] });
-  saveGroups();
-  renderPriceList();
+async function addGroup(name) {
+  const saved = await mutateGroups(() => {
+    groups.push({ id: uid(), name, items: [] });
+  });
+  if (saved) renderPriceList();
+  return saved;
 }
 
-function deleteGroup(groupId) {
+async function deleteGroup(groupId) {
   const group = groups.find(g => g.id === groupId);
-  if (!group) return;
+  if (!group) { renderPriceList(); return; }
+  const confirmedSnapshot = cloneGroups([group])[0];
   const itemCount = group.items.length;
   const detail = itemCount > 0 ? `（含 ${itemCount} 件商品）` : '';
   if (!confirm(`确定要删除对比组「${group.name || '未命名组'}」${detail}吗？此操作不可撤销。`)) return;
-  groups = groups.filter(g => g.id !== groupId);
-  // If the item being edited lived in this group, bail out of edit mode.
-  if (editingGroupId === groupId) {
-    editingId = null;
-    editingGroupId = null;
-  }
-  saveGroups();
-  renderPriceList();
+  const saved = await withPriceStorageLock(async () => {
+    const latest = readStoredGroups();
+    if (!latest.storageError) applyStoredGroups(latest);
+    const latestGroup = groups.find(g => g.id === groupId);
+    if (hasGroupSnapshotConflict(confirmedSnapshot, latestGroup)) {
+      renderPriceList();
+      showPriceStatus('该对比组在确认期间已发生变化，未执行删除；请检查后重试。');
+      return false;
+    }
+    groups = groups.filter(g => g.id !== groupId);
+    if (editingGroupId === groupId) {
+      editingId = null;
+      editingGroupId = null;
+      editingBaseRevision = null;
+    }
+    return saveGroups();
+  });
+  if (saved) renderPriceList();
 }
 
-function addItemToGroup(groupId, formData) {
+async function addItemToGroup(groupId, formData) {
+  const saved = await mutateGroups(() => {
+    const group = groups.find(g => g.id === groupId);
+    if (!group) return false;
+    group.items.push({
+      id: uid(),
+      name: formData.name || ('商品 ' + (group.items.length + 1)),
+      unitWeight: formData.unitWeight,
+      packSize: formData.packSize,
+      packCount: formData.packCount,
+      totalPrice: formData.totalPrice,
+    });
+  });
+  if (!saved) { renderPriceList(); return false; }
   const group = groups.find(g => g.id === groupId);
-  if (!group) return;
-  const item = {
-    id: uid(),
-    name: formData.name || ('商品 ' + (group.items.length + 1)),
-    unitWeight: parseFloat(formData.unitWeight),
-    packSize: parseInt(formData.packSize) || 1,
-    packCount: parseInt(formData.packCount) || 1,
-    totalPrice: parseFloat(formData.totalPrice)
-  };
-  group.items.push(item);
-  saveGroups();
-  renderGroup(group);
+  if (group) renderGroup(group);
+  return true;
 }
 
-function deleteItemFromGroup(groupId, itemId) {
-  const group = groups.find(g => g.id === groupId);
-  if (!group) return;
-  group.items = group.items.filter(i => i.id !== itemId);
-  if (editingGroupId === groupId && editingId === itemId) {
-    editingId = null;
-    editingGroupId = null;
-  }
-  saveGroups();
-  renderGroup(group);
-}
-
-function startEditItem(groupId, itemId) {
-  editingGroupId = groupId;
-  editingId = itemId;
+async function deleteItemFromGroup(groupId, itemId) {
+  const saved = await mutateGroups(() => {
+    const group = groups.find(g => g.id === groupId);
+    if (!group || !group.items.some(i => i.id === itemId)) return false;
+    group.items = group.items.filter(i => i.id !== itemId);
+    if (editingGroupId === groupId && editingId === itemId) {
+      editingId = null;
+      editingGroupId = null;
+      editingBaseRevision = null;
+    }
+  });
+  if (!saved) { renderPriceList(); return; }
   const group = groups.find(g => g.id === groupId);
   if (group) renderGroup(group);
 }
 
-function cancelEdit() {
+function startEditItem(groupId, itemId) {
+  const previousGroupId = editingGroupId;
+  editingGroupId = groupId;
+  editingId = itemId;
+  editingBaseRevision = groupsRevision;
+  if (previousGroupId && previousGroupId !== groupId) {
+    const previousGroup = groups.find(g => g.id === previousGroupId);
+    if (previousGroup) renderGroup(previousGroup);
+  }
+  const group = groups.find(g => g.id === groupId);
+  if (group) renderGroup(group);
+}
+
+function cancelEdit(groupId, itemId) {
+  if (groupId && (editingGroupId !== groupId || editingId !== itemId)) {
+    const staleGroup = groups.find(g => g.id === groupId);
+    if (staleGroup) renderGroup(staleGroup);
+    return;
+  }
   const prevGroupId = editingGroupId;
   editingId = null;
   editingGroupId = null;
+  editingBaseRevision = null;
   if (prevGroupId != null) {
     const group = groups.find(g => g.id === prevGroupId);
     if (group) renderGroup(group);
   }
 }
 
-function saveEditItem(form, groupId, itemId) {
+async function saveEditItem(form, groupId, itemId) {
   const nameEl = form.querySelector('.edit-name');
   const uwEl = form.querySelector('.edit-unit-weight');
   const psEl = form.querySelector('.edit-pack-size');
   const pcEl = form.querySelector('.edit-pack-count');
   const tpEl = form.querySelector('.edit-total-price');
 
-  const unitWeight = parseFloat(uwEl.value);
-  const totalPrice = parseFloat(tpEl.value);
+  const unitWeight = parsePositiveFiniteNumber(uwEl.value);
+  const packSize = parsePositiveInteger(psEl.value);
+  const packCount = parsePositiveInteger(pcEl.value);
+  const totalPrice = parsePositiveFiniteNumber(tpEl.value);
   let invalid = false;
-  if (isNaN(unitWeight) || unitWeight <= 0) { flagInputError(uwEl); invalid = true; }
-  if (isNaN(totalPrice) || totalPrice <= 0) { flagInputError(tpEl); invalid = true; }
+  if (unitWeight === null) { flagInputError(uwEl); invalid = true; }
+  if (packSize === null) { flagInputError(psEl); invalid = true; }
+  if (packCount === null) { flagInputError(pcEl); invalid = true; }
+  if (totalPrice === null) { flagInputError(tpEl); invalid = true; }
   if (invalid) return;
 
+  const baseRevision = editingBaseRevision;
+  const saved = await withPriceStorageLock(async () => {
+    const latest = readStoredGroups();
+    if (!latest.storageError && hasEditConflict(baseRevision, latest.revision)) {
+      applyStoredGroups(latest);
+      editingId = null;
+      editingGroupId = null;
+      editingBaseRevision = null;
+      renderPriceList();
+      showPriceStatus('该商品在其他标签页中已发生变化，已保留最新数据；请重新编辑。');
+      return false;
+    }
+    if (!latest.storageError) applyStoredGroups(latest);
+    const group = groups.find(g => g.id === groupId);
+    const item = group && group.items.find(i => i.id === itemId);
+    if (!item) { renderPriceList(); return false; }
+    item.name = nameEl.value.trim() || item.name;
+    item.unitWeight = unitWeight;
+    item.packSize = packSize;
+    item.packCount = packCount;
+    item.totalPrice = totalPrice;
+    editingId = null;
+    editingGroupId = null;
+    editingBaseRevision = null;
+    return saveGroups();
+  });
+  if (!saved) return;
   const group = groups.find(g => g.id === groupId);
-  if (!group) return;
-  const item = group.items.find(i => i.id === itemId);
-  if (!item) return;
-  item.name = nameEl.value.trim() || item.name;
-  item.unitWeight = unitWeight;
-  item.packSize = parseInt(psEl.value) || 1;
-  item.packCount = parseInt(pcEl.value) || 1;
-  item.totalPrice = totalPrice;
-
-  editingId = null;
-  editingGroupId = null;
-  saveGroups();
-  renderGroup(group);
+  if (group) renderGroup(group);
 }
 
 // Build the summary + items HTML for a single group. Shared by the full
@@ -408,7 +719,7 @@ function renderGroupContent(group) {
                 <input class="input edit-total-price" type="number" min="0.01" step="0.01" value="${item.totalPrice}" required aria-label="总价，单位元">
               </div>
               <div class="item-edit-actions">
-                <button type="button" class="btn-ghost" data-action="cancel-edit">取消</button>
+                <button type="button" class="btn-ghost" data-action="cancel-edit" data-group-id="${group.id}" data-item-id="${item.id}">取消</button>
                 <button type="submit" class="btn-primary">保存</button>
               </div>
             </form>`;
@@ -505,24 +816,29 @@ function renderPriceList() {
   }).join('');
 }
 
-function handleAddSubmit(form, groupId) {
+async function handleAddSubmit(form, groupId) {
   const uwEl = form.querySelector('[data-field="unitWeight"]');
+  const psEl = form.querySelector('[data-field="packSize"]');
+  const pcEl = form.querySelector('[data-field="packCount"]');
   const tpEl = form.querySelector('[data-field="totalPrice"]');
-  const unitWeight = parseFloat(uwEl.value);
-  const totalPrice = parseFloat(tpEl.value);
+  const unitWeight = parsePositiveFiniteNumber(uwEl.value);
+  const packSize = parsePositiveInteger(psEl.value);
+  const packCount = parsePositiveInteger(pcEl.value);
+  const totalPrice = parsePositiveFiniteNumber(tpEl.value);
   let invalid = false;
-  if (isNaN(unitWeight) || unitWeight <= 0) { flagInputError(uwEl); invalid = true; }
-  if (isNaN(totalPrice) || totalPrice <= 0) { flagInputError(tpEl); invalid = true; }
+  if (unitWeight === null) { flagInputError(uwEl); invalid = true; }
+  if (packSize === null) { flagInputError(psEl); invalid = true; }
+  if (packCount === null) { flagInputError(pcEl); invalid = true; }
+  if (totalPrice === null) { flagInputError(tpEl); invalid = true; }
   if (invalid) return;
   const formData = {
     name: form.querySelector('[data-field="name"]').value.trim(),
-    unitWeight: unitWeight,
-    packSize: form.querySelector('[data-field="packSize"]').value,
-    packCount: form.querySelector('[data-field="packCount"]').value,
-    totalPrice: totalPrice
+    unitWeight,
+    packSize,
+    packCount,
+    totalPrice,
   };
-  addItemToGroup(groupId, formData);
-  form.reset();
+  if (await addItemToGroup(groupId, formData)) form.reset();
 }
 
 function escHtml(str) {
@@ -534,46 +850,62 @@ function escHtml(str) {
 }
 
 function initPriceCalculator() {
+  initPricePresence();
   loadGroups();
   renderPriceList();
+
+  window.addEventListener('storage', function(e) {
+    if (e.key !== PRICE_STORAGE_KEY) return;
+    const stored = decodeStoredGroups(e.newValue);
+    if (stored.revision <= groupsRevision) return;
+    applyStoredGroups(stored);
+    editingId = null;
+    editingGroupId = null;
+    editingBaseRevision = null;
+    renderPriceList();
+    showPriceStatus(stored.hadInvalidData
+      ? '其他标签页写入的数据格式无效，已安全忽略。'
+      : '已同步其他标签页的修改。');
+  });
 
   const list = document.getElementById('price-list');
 
   // Single delegated click handler for every action button inside the list.
-  list.addEventListener('click', function(e) {
+  list.addEventListener('click', async function(e) {
     const btn = e.target.closest('[data-action]');
     if (!btn || !list.contains(btn)) return;
     const action = btn.dataset.action;
     const groupId = btn.dataset.groupId;
     const itemId = btn.dataset.itemId;
     if (action === 'edit') startEditItem(groupId, itemId);
-    else if (action === 'delete-item') deleteItemFromGroup(groupId, itemId);
-    else if (action === 'cancel-edit') cancelEdit();
-    else if (action === 'delete-group') deleteGroup(groupId);
+    else if (action === 'delete-item') await deleteItemFromGroup(groupId, itemId);
+    else if (action === 'cancel-edit') cancelEdit(groupId, itemId);
+    else if (action === 'delete-group') await deleteGroup(groupId);
   });
 
   // Single delegated submit handler for both the add-item and edit-item forms.
-  list.addEventListener('submit', function(e) {
+  list.addEventListener('submit', async function(e) {
     const form = e.target;
     if (!form.matches('form')) return;
     if (form.classList.contains('group-add-item-form')) {
       e.preventDefault();
-      handleAddSubmit(form, form.dataset.groupId);
+      await runFormSubmissionOnce(form, () => handleAddSubmit(form, form.dataset.groupId));
     } else if (form.classList.contains('item-edit-form')) {
       e.preventDefault();
-      saveEditItem(form, form.dataset.groupId, form.dataset.itemId);
+      await runFormSubmissionOnce(form, () => saveEditItem(form, form.dataset.groupId, form.dataset.itemId));
     }
   });
 
   const createGroupForm = document.getElementById('create-group-form');
   if (createGroupForm) {
-    createGroupForm.addEventListener('submit', function(e) {
+    createGroupForm.addEventListener('submit', async function(e) {
       e.preventDefault();
       const nameInput = document.getElementById('new-group-name');
       const name = nameInput.value.trim();
       if (!name) { flagInputError(nameInput); return; }
-      addGroup(name);
-      nameInput.value = '';
+      await runFormSubmissionOnce(createGroupForm, async () => {
+        if (await addGroup(name)) nameInput.value = '';
+      });
     });
   }
 }
@@ -702,16 +1034,42 @@ function initBossTimer() {
 }
 
 /* ===== INIT ===== */
-document.addEventListener('DOMContentLoaded', () => {
-  setActiveTab(restoreTab());
-  initTabKeyboard();
-  window.addEventListener('hashchange', () => {
-    const hash = location.hash.replace('#', '');
-    if (TAB_IDS.includes(hash)) switchTab(hash);
-  });
+function initSafely(name, initializer) {
+  try {
+    initializer();
+  } catch (error) {
+    console.error(`[Toolbox] ${name} 初始化失败`, error);
+  }
+}
 
-  initEnergyConverter();
-  initCounter();
-  initPriceCalculator();
-  initBossTimer();
-});
+if (typeof document !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', () => {
+    setActiveTab(restoreTab());
+    initTabKeyboard();
+    window.addEventListener('hashchange', () => {
+      const hash = location.hash.replace('#', '');
+      if (TAB_IDS.includes(hash)) switchTab(hash);
+    });
+
+    initSafely('热量换算', initEnergyConverter);
+    initSafely('计数器', initCounter);
+    initSafely('比价计算', initPriceCalculator);
+    initSafely('Boss 计时', initBossTimer);
+  });
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    decodeStoredGroups,
+    findCheapestInGroup,
+    hasEditConflict,
+    hasFreshPricePresence,
+    hasGroupSnapshotConflict,
+    parseNonNegativeFiniteNumber,
+    parsePositiveFiniteNumber,
+    parsePositiveInteger,
+    runFormSubmissionOnce,
+    runWithPriceStorageLock,
+    shouldHandleCounterShortcut,
+  };
+}
