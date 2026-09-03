@@ -26,8 +26,11 @@ button { cursor: pointer; background: none; border: none; }
   --color-border: #d4d1ca;
   --color-divider: #dcd9d5;
   --color-text: #28251d;
-  --color-text-muted: #7a7974;
-  --color-text-faint: #bab9b4;
+  /* Muted/faint are used for real content text (labels, empty states), so
+     both must keep ≥4.5:1 contrast on the cream backgrounds (WCAG AA) —
+     do not lighten them back toward the old #7a7974 / #bab9b4. */
+  --color-text-muted: #6b6a66;
+  --color-text-faint: #6e6d68;
   --color-primary: #01696f;
   --color-primary-hover: #0c4e54;
   --color-primary-highlight: #cedcd8;
@@ -567,4 +570,10 @@ button { cursor: pointer; background: none; border: none; }
 
 @media (min-width: 1024px) {
   .container { padding: var(--space-10) var(--space-12); }
+}
+
+/* ===== REDUCED MOTION ===== */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .tool-page.active, .boss-flash, .boss-card.boss-spawned { animation: none; }
 }

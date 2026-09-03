@@ -9,6 +9,7 @@
   <!-- Light theme only, by design (see styles.css). Keeps form controls
        rendering light even on dark-mode systems. -->
   <meta name="color-scheme" content="light">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'">
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -110,7 +111,9 @@
           <p class="boss-label">下次刷新时间</p>
           <p class="boss-spawn-time" id="n-spawn">计算中…</p>
           <p class="boss-label">距离刷新还有</p>
-          <div class="boss-countdown-row" role="timer" aria-live="polite">
+          <!-- role="timer" stays quiet per tick on purpose: adding aria-live
+               here would make screen readers announce the digits every second. -->
+          <div class="boss-countdown-row" role="timer">
             <div class="boss-digit-row">
               <div class="boss-digit-col">
                 <span class="boss-time-number" id="n-m">00</span>
@@ -130,7 +133,7 @@
           <p class="boss-label">下次刷新时间</p>
           <p class="boss-spawn-time" id="w-spawn">计算中…</p>
           <p class="boss-label">距离刷新还有</p>
-          <div class="boss-countdown-row" role="timer" aria-live="polite">
+          <div class="boss-countdown-row" role="timer">
             <div class="boss-digit-row">
               <div class="boss-digit-col">
                 <span class="boss-time-number" id="w-h">00</span>

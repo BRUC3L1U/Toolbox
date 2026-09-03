@@ -21,8 +21,11 @@ function parsePositiveInteger(value) {
   return number !== null && Number.isSafeInteger(number) ? number : null;
 }
 
-function shouldHandleCounterShortcut(counterActive, isTextEntry, isTabControl) {
-  return counterActive && !isTextEntry && !isTabControl;
+// Modified keys belong to the browser and OS (Cmd/Ctrl+R reload, Ctrl+'+'
+// zoom): claiming them would break those shortcuts and silently reset or
+// advance the counter.
+function shouldHandleCounterShortcut(counterActive, isTextEntry, isTabControl, hasModifier) {
+  return counterActive && !isTextEntry && !isTabControl && !hasModifier;
 }
 
 // Roving tabindex: only the active tab is in the tab order (tabindex="0"),
@@ -78,6 +81,9 @@ function initTabKeyboard() {
   tablist.addEventListener('keydown', function(e) {
     const btn = e.target.closest('.tab-btn');
     if (!btn) return;
+    // Modified arrow keys belong to the browser/OS (e.g. Cmd+Left history
+    // navigation); only plain keys drive tab navigation.
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     const currentIdx = TAB_IDS.indexOf(btn.id.replace('tab-', ''));
     if (currentIdx === -1) return;
     let nextIdx = null;
@@ -183,7 +189,8 @@ function initCounter() {
     const counterActive = !!counterPage && counterPage.classList.contains('active');
     const isTextEntry = !!e.target.closest('input, textarea, select, [contenteditable="true"]');
     const isTabControl = !!e.target.closest('[role="tab"], [role="tablist"]');
-    if (!shouldHandleCounterShortcut(counterActive, isTextEntry, isTabControl)) return;
+    const hasModifier = e.metaKey || e.ctrlKey || e.altKey;
+    if (!shouldHandleCounterShortcut(counterActive, isTextEntry, isTabControl, hasModifier)) return;
     // A focused button only claims Space (it would activate the button *and*
     // run the shortcut); arrows and R stay live so clicking +/- with the mouse
     // doesn't kill keyboard control.
@@ -334,19 +341,28 @@ function runWithPriceStorageLock(lockManager, task, fallback) {
   return fallback ? fallback(task) : Promise.resolve().then(task);
 }
 
+// Presence heartbeat for the no-Web-Locks fallback: it is the only signal
+// other fallback tabs use to detect this tab, so it only runs where
+// navigator.locks is missing (everywhere else it would be pure localStorage
+// churn every 2 seconds).
 function initPricePresence() {
-  if (pricePresenceKey) return;
-  priceTabId = uid();
-  pricePresenceKey = PRICE_PRESENCE_PREFIX + priceTabId;
-  const touch = () => {
+  if (!pricePresenceKey) {
+    priceTabId = uid();
+    pricePresenceKey = PRICE_PRESENCE_PREFIX + priceTabId;
+  }
+  clearInterval(pricePresenceTimer);
+  try { localStorage.setItem(pricePresenceKey, String(Date.now())); } catch (e) {}
+  pricePresenceTimer = setInterval(() => {
     try { localStorage.setItem(pricePresenceKey, String(Date.now())); } catch (e) {}
-  };
-  touch();
-  pricePresenceTimer = setInterval(touch, 2000);
-  window.addEventListener('pagehide', () => {
-    clearInterval(pricePresenceTimer);
+  }, 2000);
+}
+
+function stopPriceHeartbeat() {
+  clearInterval(pricePresenceTimer);
+  pricePresenceTimer = null;
+  if (pricePresenceKey) {
     try { localStorage.removeItem(pricePresenceKey); } catch (e) {}
-  }, { once: true });
+  }
 }
 
 function hasFreshPricePresence(entries, ownKey, now) {
@@ -621,32 +637,27 @@ function cancelEdit(groupId, itemId) {
   }
 }
 
-async function saveEditItem(form, groupId, itemId) {
-  const nameEl = form.querySelector('.edit-name');
-  const uwEl = form.querySelector('.edit-unit-weight');
-  const psEl = form.querySelector('.edit-pack-size');
-  const pcEl = form.querySelector('.edit-pack-count');
-  const tpEl = form.querySelector('.edit-total-price');
+// Only drop the edit session when it still points at this exact item — a
+// save finishing must not clobber an edit the user started elsewhere while
+// the write was in flight (the fallback lock path adds a 100ms window).
+function clearEditingIfMatches(groupId, itemId) {
+  if (editingGroupId !== groupId || editingId !== itemId) return;
+  editingId = null;
+  editingGroupId = null;
+  editingBaseRevision = null;
+}
 
-  const unitWeight = parsePositiveFiniteNumber(uwEl.value);
-  const packSize = parsePositiveInteger(psEl.value);
-  const packCount = parsePositiveInteger(pcEl.value);
-  const totalPrice = parsePositiveFiniteNumber(tpEl.value);
-  let invalid = false;
-  if (unitWeight === null) { flagInputError(uwEl); invalid = true; }
-  if (packSize === null) { flagInputError(psEl); invalid = true; }
-  if (packCount === null) { flagInputError(pcEl); invalid = true; }
-  if (totalPrice === null) { flagInputError(tpEl); invalid = true; }
-  if (invalid) return;
+async function saveEditItem(form, groupId, itemId) {
+  const fields = parseItemFields(form);
+  if (!fields) return;
+  const nameEl = form.querySelector('[data-field="name"]');
 
   const baseRevision = editingBaseRevision;
   const saved = await withPriceStorageLock(async () => {
     const latest = readStoredGroups();
     if (!latest.storageError && hasEditConflict(baseRevision, latest.revision)) {
       applyStoredGroups(latest);
-      editingId = null;
-      editingGroupId = null;
-      editingBaseRevision = null;
+      clearEditingIfMatches(groupId, itemId);
       renderPriceList();
       showPriceStatus('该商品在其他标签页中已发生变化，已保留最新数据；请重新编辑。');
       return false;
@@ -656,13 +667,11 @@ async function saveEditItem(form, groupId, itemId) {
     const item = group && group.items.find(i => i.id === itemId);
     if (!item) { renderPriceList(); return false; }
     item.name = nameEl.value.trim() || item.name;
-    item.unitWeight = unitWeight;
-    item.packSize = packSize;
-    item.packCount = packCount;
-    item.totalPrice = totalPrice;
-    editingId = null;
-    editingGroupId = null;
-    editingBaseRevision = null;
+    item.unitWeight = fields.unitWeight;
+    item.packSize = fields.packSize;
+    item.packCount = fields.packCount;
+    item.totalPrice = fields.totalPrice;
+    clearEditingIfMatches(groupId, itemId);
     return saveGroups();
   });
   if (!saved) return;
@@ -700,23 +709,23 @@ function renderGroupContent(group) {
             <form class="item-edit-form" data-group-id="${group.id}" data-item-id="${item.id}">
               <div class="form-field full-width">
                 <label>商品名称</label>
-                <input class="input edit-name" type="text" value="${escHtml(item.name)}" aria-label="商品名称">
+                <input class="input" type="text" data-field="name" value="${escHtml(item.name)}" aria-label="商品名称">
               </div>
               <div class="form-field">
                 <label>单品重量 (g)</label>
-                <input class="input edit-unit-weight" type="number" min="0.01" step="0.01" value="${item.unitWeight}" required aria-label="单品重量，单位克">
+                <input class="input" type="number" min="0.01" step="0.01" data-field="unitWeight" value="${item.unitWeight}" required aria-label="单品重量，单位克">
               </div>
               <div class="form-field">
                 <label>套装内数量</label>
-                <input class="input edit-pack-size" type="number" min="1" step="1" value="${item.packSize}" aria-label="套装内数量">
+                <input class="input" type="number" min="1" step="1" data-field="packSize" value="${item.packSize}" aria-label="套装内数量">
               </div>
               <div class="form-field">
                 <label>套装数量</label>
-                <input class="input edit-pack-count" type="number" min="1" step="1" value="${item.packCount}" aria-label="套装数量">
+                <input class="input" type="number" min="1" step="1" data-field="packCount" value="${item.packCount}" aria-label="套装数量">
               </div>
               <div class="form-field">
                 <label>总价 (元)</label>
-                <input class="input edit-total-price" type="number" min="0.01" step="0.01" value="${item.totalPrice}" required aria-label="总价，单位元">
+                <input class="input" type="number" min="0.01" step="0.01" data-field="totalPrice" value="${item.totalPrice}" required aria-label="总价，单位元">
               </div>
               <div class="item-edit-actions">
                 <button type="button" class="btn-ghost" data-action="cancel-edit" data-group-id="${group.id}" data-item-id="${item.id}">取消</button>
@@ -816,27 +825,35 @@ function renderPriceList() {
   }).join('');
 }
 
-async function handleAddSubmit(form, groupId) {
-  const uwEl = form.querySelector('[data-field="unitWeight"]');
-  const psEl = form.querySelector('[data-field="packSize"]');
-  const pcEl = form.querySelector('[data-field="packCount"]');
-  const tpEl = form.querySelector('[data-field="totalPrice"]');
-  const unitWeight = parsePositiveFiniteNumber(uwEl.value);
-  const packSize = parsePositiveInteger(psEl.value);
-  const packCount = parsePositiveInteger(pcEl.value);
-  const totalPrice = parsePositiveFiniteNumber(tpEl.value);
+// Shared validation for the add-item and edit-item forms: parse all four
+// numeric fields and flag every invalid one so the user sees all errors.
+function parseItemFields(form) {
+  const parsers = {
+    unitWeight: parsePositiveFiniteNumber,
+    packSize: parsePositiveInteger,
+    packCount: parsePositiveInteger,
+    totalPrice: parsePositiveFiniteNumber,
+  };
+  const fields = {};
   let invalid = false;
-  if (unitWeight === null) { flagInputError(uwEl); invalid = true; }
-  if (packSize === null) { flagInputError(psEl); invalid = true; }
-  if (packCount === null) { flagInputError(pcEl); invalid = true; }
-  if (totalPrice === null) { flagInputError(tpEl); invalid = true; }
-  if (invalid) return;
+  for (const [field, parse] of Object.entries(parsers)) {
+    const el = form.querySelector('[data-field="' + field + '"]');
+    const value = parse(el.value);
+    if (value === null) { flagInputError(el); invalid = true; }
+    fields[field] = value;
+  }
+  return invalid ? null : fields;
+}
+
+async function handleAddSubmit(form, groupId) {
+  const fields = parseItemFields(form);
+  if (!fields) return;
   const formData = {
     name: form.querySelector('[data-field="name"]').value.trim(),
-    unitWeight,
-    packSize,
-    packCount,
-    totalPrice,
+    unitWeight: fields.unitWeight,
+    packSize: fields.packSize,
+    packCount: fields.packCount,
+    totalPrice: fields.totalPrice,
   };
   if (await addItemToGroup(groupId, formData)) form.reset();
 }
@@ -850,7 +867,14 @@ function escHtml(str) {
 }
 
 function initPriceCalculator() {
-  initPricePresence();
+  const lockManager = typeof navigator !== 'undefined' ? navigator.locks : null;
+  if (!lockManager) {
+    initPricePresence();
+    // Release the presence claim while hidden and rebuild it on return, so a
+    // bfcache restore doesn't leave this tab invisible to other fallback tabs.
+    window.addEventListener('pagehide', stopPriceHeartbeat);
+    window.addEventListener('pageshow', initPricePresence);
+  }
   loadGroups();
   renderPriceList();
 
@@ -858,11 +882,36 @@ function initPriceCalculator() {
     if (e.key !== PRICE_STORAGE_KEY) return;
     const stored = decodeStoredGroups(e.newValue);
     if (stored.revision <= groupsRevision) return;
+    const previousGroups = groups;
+    // Re-render only groups whose content actually changed so in-progress
+    // add-form inputs elsewhere survive the sync.
+    const changedIds = new Set(stored.groups
+      .filter(g => {
+        const prev = previousGroups.find(p => p.id === g.id);
+        return !prev || JSON.stringify(prev) !== JSON.stringify(g);
+      })
+      .map(g => g.id));
+    // An edit whose group is byte-identical stays open; just re-base it so
+    // the next save passes the revision check.
+    const keepEditing = editingGroupId != null && !changedIds.has(editingGroupId) &&
+      stored.groups.some(g => g.id === editingGroupId);
     applyStoredGroups(stored);
-    editingId = null;
-    editingGroupId = null;
-    editingBaseRevision = null;
-    renderPriceList();
+    if (keepEditing) {
+      editingBaseRevision = stored.revision;
+    } else {
+      editingId = null;
+      editingGroupId = null;
+      editingBaseRevision = null;
+    }
+    if (previousGroups.some(p => !stored.groups.some(g => g.id === p.id))) {
+      renderPriceList();
+    } else {
+      stored.groups.forEach(g => {
+        // A group added remotely has no card yet; renderGroup falls back to
+        // a full render for it.
+        if (changedIds.has(g.id)) renderGroup(g);
+      });
+    }
     showPriceStatus(stored.hadInvalidData
       ? '其他标签页写入的数据格式无效，已安全忽略。'
       : '已同步其他标签页的修改。');
@@ -911,10 +960,34 @@ function initPriceCalculator() {
 }
 
 /* ===== BOSS TIMER ===== */
+// Pure schedule/format helpers live at module level so Node's test runner
+// can exercise the boundary math directly.
+function pad(n) { return String(n).padStart(2, '0'); }
+
+// Next spawn strictly after `now`: ceil alone returns a boundary that can
+// equal `now`, so the loop advances one extra cycle in that case.
+function getNext(now, baseMs, intervalMs) {
+  const elapsed = now - baseMs;
+  let next = baseMs + Math.ceil(elapsed / intervalMs) * intervalMs;
+  while (next <= now) next += intervalMs;
+  return next;
+}
+
+function fmtCountdown(totalSecs, hasHours) {
+  if (hasHours) {
+    const h = Math.floor(totalSecs / 3600);
+    const m = Math.floor((totalSecs % 3600) / 60);
+    const s = totalSecs % 60;
+    return pad(h) + ':' + pad(m) + ':' + pad(s);
+  }
+  const m = Math.floor(totalSecs / 60);
+  const s = totalSecs % 60;
+  return pad(m) + ':' + pad(s);
+}
+
 function initBossTimer() {
   const originalTitle = document.title;
 
-  function pad(n) { return String(n).padStart(2, '0'); }
   function flash(el) { el.classList.remove('boss-flash'); void el.offsetWidth; el.classList.add('boss-flash'); }
   function fmtDate(ts) {
     return new Date(ts).toLocaleString('zh-CN', {
@@ -922,29 +995,6 @@ function initBossTimer() {
       hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
     }).replace(/\//g, '-');
   }
-  function getNext(baseMs, intervalMs) {
-    const now = Date.now();
-    const elapsed = now - baseMs;
-    // Use ceil so that when elapsed is an exact multiple of intervalMs
-    // we don't skip ahead an extra cycle.
-    let next = baseMs + Math.ceil(elapsed / intervalMs) * intervalMs;
-    // If the computed boundary is already in the past (or exactly now),
-    // advance to the following interval.
-    while (next <= now) next += intervalMs;
-    return next;
-  }
-  function fmtCountdown(totalSecs, hasHours) {
-    if (hasHours) {
-      const h = Math.floor(totalSecs / 3600);
-      const m = Math.floor((totalSecs % 3600) / 60);
-      const s = totalSecs % 60;
-      return pad(h) + ':' + pad(m) + ':' + pad(s);
-    }
-    const m = Math.floor(totalSecs / 60);
-    const s = totalSecs % 60;
-    return pad(m) + ':' + pad(s);
-  }
-
   function onSpawn(cfg) {
     // Distinct spawn pulse so a refresh is obvious even without watching the digits.
     cfg.card.classList.remove('boss-spawned');
@@ -974,7 +1024,7 @@ function initBossTimer() {
 
   function updateCard(cfg) {
     const now = Date.now();
-    if (now >= cfg.next) cfg.next = getNext(cfg.base, cfg.interval);
+    if (now >= cfg.next) cfg.next = getNext(now, cfg.base, cfg.interval);
     // Detect a rollover into the next cycle → fire spawn effects once.
     if (cfg.notifiedFor !== -1 && cfg.next !== cfg.notifiedFor) onSpawn(cfg);
     cfg.notifiedFor = cfg.next;
@@ -1060,8 +1110,12 @@ if (typeof document !== 'undefined') {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    convertKcalToKj,
+    convertKjToKcal,
     decodeStoredGroups,
     findCheapestInGroup,
+    fmtCountdown,
+    getNext,
     hasEditConflict,
     hasFreshPricePresence,
     hasGroupSnapshotConflict,
