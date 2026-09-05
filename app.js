@@ -706,26 +706,29 @@ function renderGroupContent(group) {
                 <div class="item-spec">${item.unitWeight}g × ${item.packSize}件 × ${item.packCount}套</div>
               </div>
             </div>
-            <form class="item-edit-form" data-group-id="${group.id}" data-item-id="${item.id}">
+            <!-- novalidate routes submits through parseItemFields like the
+                 other forms, so errors show the shared .error styling instead
+                 of native bubbles in the browser's UI language. -->
+            <form class="item-edit-form" data-group-id="${group.id}" data-item-id="${item.id}" novalidate>
               <div class="form-field full-width">
-                <label>商品名称</label>
-                <input class="input" type="text" data-field="name" value="${escHtml(item.name)}" aria-label="商品名称">
+                <label for="edit-name-${item.id}">商品名称</label>
+                <input class="input" type="text" id="edit-name-${item.id}" data-field="name" value="${escHtml(item.name)}">
               </div>
               <div class="form-field">
-                <label>单品重量 (g)</label>
-                <input class="input" type="number" min="0.01" step="0.01" data-field="unitWeight" value="${item.unitWeight}" required aria-label="单品重量，单位克">
+                <label for="edit-weight-${item.id}">单品重量 (g)</label>
+                <input class="input" type="number" min="0.01" step="0.01" id="edit-weight-${item.id}" data-field="unitWeight" value="${item.unitWeight}" required>
               </div>
               <div class="form-field">
-                <label>套装内数量</label>
-                <input class="input" type="number" min="1" step="1" data-field="packSize" value="${item.packSize}" aria-label="套装内数量">
+                <label for="edit-pack-size-${item.id}">套装内数量</label>
+                <input class="input" type="number" min="1" step="1" id="edit-pack-size-${item.id}" data-field="packSize" value="${item.packSize}">
               </div>
               <div class="form-field">
-                <label>套装数量</label>
-                <input class="input" type="number" min="1" step="1" data-field="packCount" value="${item.packCount}" aria-label="套装数量">
+                <label for="edit-pack-count-${item.id}">套装数量</label>
+                <input class="input" type="number" min="1" step="1" id="edit-pack-count-${item.id}" data-field="packCount" value="${item.packCount}">
               </div>
               <div class="form-field">
-                <label>总价 (元)</label>
-                <input class="input" type="number" min="0.01" step="0.01" data-field="totalPrice" value="${item.totalPrice}" required aria-label="总价，单位元">
+                <label for="edit-price-${item.id}">总价 (元)</label>
+                <input class="input" type="number" min="0.01" step="0.01" id="edit-price-${item.id}" data-field="totalPrice" value="${item.totalPrice}" required>
               </div>
               <div class="item-edit-actions">
                 <button type="button" class="btn-ghost" data-action="cancel-edit" data-group-id="${group.id}" data-item-id="${item.id}">取消</button>
