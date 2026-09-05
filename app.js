@@ -445,9 +445,7 @@ async function mutateGroups(mutator) {
     const latest = readStoredGroups();
     if (!latest.storageError && latest.revision !== groupsRevision) {
       applyStoredGroups(latest);
-      editingId = null;
-      editingGroupId = null;
-      editingBaseRevision = null;
+      clearEditingSession();
       renderPriceList();
       showPriceStatus('已同步其他标签页的修改。');
     }
@@ -489,9 +487,7 @@ function saveGroups() {
   const latest = readStoredGroups();
   if (!latest.storageError && latest.revision !== groupsRevision) {
     applyStoredGroups(latest);
-    editingId = null;
-    editingGroupId = null;
-    editingBaseRevision = null;
+    clearEditingSession();
     renderPriceList();
     showPriceStatus('检测到其他标签页的新修改，已保留最新数据；请重试刚才的操作。');
     return false;
@@ -564,9 +560,7 @@ async function deleteGroup(groupId) {
     }
     groups = groups.filter(g => g.id !== groupId);
     if (editingGroupId === groupId) {
-      editingId = null;
-      editingGroupId = null;
-      editingBaseRevision = null;
+      clearEditingSession();
     }
     return saveGroups();
   });
@@ -598,9 +592,7 @@ async function deleteItemFromGroup(groupId, itemId) {
     if (!group || !group.items.some(i => i.id === itemId)) return false;
     group.items = group.items.filter(i => i.id !== itemId);
     if (editingGroupId === groupId && editingId === itemId) {
-      editingId = null;
-      editingGroupId = null;
-      editingBaseRevision = null;
+      clearEditingSession();
     }
   });
   if (!saved) { renderPriceList(); return; }
@@ -628,13 +620,20 @@ function cancelEdit(groupId, itemId) {
     return;
   }
   const prevGroupId = editingGroupId;
-  editingId = null;
-  editingGroupId = null;
-  editingBaseRevision = null;
+  clearEditingSession();
   if (prevGroupId != null) {
     const group = groups.find(g => g.id === prevGroupId);
     if (group) renderGroup(group);
   }
+}
+
+// Drop the edit session wholesale. The three fields move together, so every
+// path that ends editing goes through this helper instead of clearing them
+// one by one.
+function clearEditingSession() {
+  editingId = null;
+  editingGroupId = null;
+  editingBaseRevision = null;
 }
 
 // Only drop the edit session when it still points at this exact item — a
@@ -642,9 +641,7 @@ function cancelEdit(groupId, itemId) {
 // the write was in flight (the fallback lock path adds a 100ms window).
 function clearEditingIfMatches(groupId, itemId) {
   if (editingGroupId !== groupId || editingId !== itemId) return;
-  editingId = null;
-  editingGroupId = null;
-  editingBaseRevision = null;
+  clearEditingSession();
 }
 
 async function saveEditItem(form, groupId, itemId) {
@@ -902,9 +899,7 @@ function initPriceCalculator() {
     if (keepEditing) {
       editingBaseRevision = stored.revision;
     } else {
-      editingId = null;
-      editingGroupId = null;
-      editingBaseRevision = null;
+      clearEditingSession();
     }
     if (previousGroups.some(p => !stored.groups.some(g => g.id === p.id))) {
       renderPriceList();
