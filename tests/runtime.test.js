@@ -1,0 +1,157 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+
+const source = fs.readFileSync(require.resolve('../app.js'), 'utf8');
+function runtime(storage = new Map(), locks) {
+  const listeners = {};
+  const elements = new Map();
+  const document = {
+    activeElement: null,
+    addEventListener() {},
+    getElementById(id) {
+      if (!elements.has(id)) elements.set(id, { textContent: '', hidden: true, style: {}, addEventListener() {} });
+      return elements.get(id);
+    },
+    querySelector() { return null; },
+    createElement() {
+      return { set textContent(value) { this.innerHTML = String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); } };
+    },
+  };
+  const context = vm.createContext({
+    console, document, navigator: { locks },
+    window: { addEventListener(name, handler) { listeners[name] = handler; } },
+    localStorage: {
+      getItem: key => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: key => storage.delete(key),
+      key: index => [...storage.keys()][index],
+      get length() { return storage.size; },
+    },
+    setTimeout: fn => { queueMicrotask(fn); return 1; }, clearTimeout() {},
+    setInterval: () => 1, clearInterval() {},
+  });
+  vm.runInContext(source, context);
+  return { context, document, listeners, run: code => vm.runInContext(code, context) };
+}
+function serialLocks() {
+  let queue = Promise.resolve();
+  return { request(name, task) { const result = queue.then(task); queue = result.catch(() => {}); return result; } };
+}
+const group = { id: 'g', name: '食品', items: [] };
+
+test('counter reads and writes under the shared lock across tabs', async () => {
+  const storage = new Map([['toolbox_counter', '0']]);
+  const locks = serialLocks();
+  const a = runtime(storage, locks), b = runtime(storage, locks);
+  a.run('loadCounter()'); b.run('loadCounter()');
+  await Promise.all([a.run('updateCounter(1)'), b.run('updateCounter(1)')]);
+  assert.equal(storage.get('toolbox_counter'), '2');
+  await a.run('resetCounter()');
+  await b.run('updateCounter(1)');
+  assert.equal(storage.get('toolbox_counter'), '1');
+});
+
+test('counter receives external changes and storage clearing', () => {
+  const storage = new Map([['toolbox_counter', '4']]);
+  const tab = runtime(storage, serialLocks());
+  tab.run('initCounter()');
+  storage.set('toolbox_counter', '7');
+  tab.listeners.storage({ key: 'toolbox_counter' });
+  assert.equal(String(tab.document.getElementById('counter-value').textContent), '7');
+  storage.clear();
+  tab.listeners.storage({ key: null });
+  assert.equal(String(tab.document.getElementById('counter-value').textContent), '0');
+});
+
+test('full price renders retain existing group form drafts', async () => {
+  const storage = new Map([['toolbox_price_groups', JSON.stringify({v: 1, revision: 1, groups: [group]})]]);
+  const tab = runtime(storage, serialLocks());
+  let input = { dataset: { field: 'name' }, value: '尚未提交的商品', focus() {} };
+  const form = () => ({ dataset: { groupId: 'g' }, querySelectorAll: () => [input] });
+  const list = tab.document.getElementById('price-list');
+  list.querySelectorAll = () => [form()];
+  list.querySelector = () => form();
+  Object.defineProperty(list, 'innerHTML', { set() { input = { ...input, value: '' }; } });
+  tab.run('loadGroups()');
+  await tab.run('addGroup("新组")');
+  assert.equal(input.value, '尚未提交的商品');
+});
+
+test('added fractional quantities remain editable under the same validation', () => {
+  const tab = runtime();
+  const result = tab.run(`parseItemFields({querySelector(selector) {return {value: selector.includes('unitWeight') ? '0.001' : '1'};}})`);
+  assert.equal(result.unitWeight, 0.001);
+  const html = tab.run(`editingId='i'; editingGroupId='g'; renderGroupContent({id:'g',items:[{id:'i',name:'A',unitWeight:0.001,packSize:1,packCount:1,totalPrice:1}]}).itemsHtml`);
+  assert.match(html, /<form[^>]*class="item-edit-form"[^>]*novalidate/);
+  assert.match(html, /value="0.001"/);
+});
+
+test('price mutations merge latest storage and roll back failed saves', async () => {
+  const storage = new Map([['toolbox_price_groups', JSON.stringify({v: 1, revision: 1, groups: [group]})]]);
+  const tab = runtime(storage, serialLocks());
+  // Rendering is outside this persistence test; exercised separately above.
+  tab.run('renderPriceList = () => {}; renderGroup = () => {}; loadGroups()');
+  storage.set('toolbox_price_groups', JSON.stringify({v: 1, revision: 2, groups: [group, {id: 'remote', name: '其他标签', items: []}]}));
+  await tab.run('addGroup("本页")');
+  assert.equal(JSON.parse(storage.get('toolbox_price_groups')).groups.length, 3);
+  const saved = storage.get('toolbox_price_groups');
+  tab.run('localStorage.setItem = () => { throw new Error("quota"); }');
+  assert.equal(await tab.run('addGroup("不能保存")'), false);
+  assert.equal(storage.get('toolbox_price_groups'), saved);
+  assert.equal(tab.run('groups.length'), 3);
+});
+
+test('counter fallback refuses multiple tabs and succeeds once the other closes', async () => {
+  const storage = new Map([['toolbox_counter', '5']]);
+  const a = runtime(storage), b = runtime(storage);
+  a.run('initPricePresence(); loadCounter()'); b.run('initPricePresence(); loadCounter()');
+  assert.equal(await a.run('updateCounter(1)'), false);
+  assert.equal(storage.get('toolbox_counter'), '5');
+  b.run('stopPriceHeartbeat()');
+  assert.equal(await a.run('updateCounter(1)'), true);
+  assert.equal(storage.get('toolbox_counter'), '6');
+});
+
+test('counter storage failure leaves both display and saved count unchanged', async () => {
+  const storage = new Map([['toolbox_counter', '3']]);
+  const tab = runtime(storage, serialLocks());
+  tab.run('loadCounter(); localStorage.setItem = () => { throw new Error("quota"); }');
+  assert.equal(await tab.run('updateCounter(1)'), false);
+  assert.equal(storage.get('toolbox_counter'), '3');
+  assert.equal(String(tab.document.getElementById('counter-value').textContent), '3');
+  assert.match(tab.document.getElementById('counter-storage-status').textContent, /无法保存/);
+});
+
+test('counter refuses unsafe integer overflow', async () => {
+  const storage = new Map([['toolbox_counter', String(Number.MAX_SAFE_INTEGER)]]);
+  const tab = runtime(storage, serialLocks());
+  assert.equal(await tab.run('updateCounter(1)'), false);
+  assert.equal(storage.get('toolbox_counter'), String(Number.MAX_SAFE_INTEGER));
+});
+
+test('stale price edit cannot overwrite a newer persisted item', async () => {
+  const item = {id: 'i', name: '原商品', unitWeight: 100, packSize: 1, packCount: 1, totalPrice: 10};
+  const storage = new Map([['toolbox_price_groups', JSON.stringify({v: 1, revision: 1, groups: [{...group, items: [item]}]})]]);
+  const tab = runtime(storage, serialLocks());
+  tab.run('renderPriceList = () => {}; renderGroup = () => {}; loadGroups(); startEditItem("g", "i")');
+  const latest = JSON.stringify({v: 1, revision: 2, groups: [{...group, items: [{...item, name: '其他标签修改'}]}]});
+  storage.set('toolbox_price_groups', latest);
+  tab.context.form = {querySelector(selector) { return {value: selector.includes('name') ? '过期修改' : '1'}; }};
+  await tab.run('saveEditItem(form, "g", "i")');
+  assert.equal(storage.get('toolbox_price_groups'), latest);
+  assert.equal(tab.run('groups[0].items[0].name'), '其他标签修改');
+  assert.equal(tab.run('editingId'), null);
+});
+
+test('failed price edit retains its editing session for retry', async () => {
+  const item = {id: 'i', name: '原商品', unitWeight: 100, packSize: 1, packCount: 1, totalPrice: 10};
+  const storage = new Map([['toolbox_price_groups', JSON.stringify({v: 1, revision: 1, groups: [{...group, items: [item]}]})]]);
+  const tab = runtime(storage, serialLocks());
+  tab.run('renderPriceList = () => {}; renderGroup = () => {}; loadGroups(); startEditItem("g", "i"); localStorage.setItem = () => { throw new Error("quota"); }');
+  tab.context.form = {querySelector(selector) { return {value: selector.includes('name') ? '修改草稿' : '1'}; }};
+  await tab.run('saveEditItem(form, "g", "i")');
+  assert.equal(tab.run('editingId'), 'i');
+  assert.equal(tab.run('groups[0].items[0].name'), '原商品');
+});

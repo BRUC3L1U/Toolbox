@@ -157,29 +157,69 @@ let counterState = { value: 0 };
 
 function loadCounter() {
   try {
-    const raw = localStorage.getItem(COUNTER_KEY);
-    if (raw !== null) {
-      const storedValue = Number(raw);
-      counterState.value = Number.isSafeInteger(storedValue) ? storedValue : 0;
-    }
+    const storedValue = Number(localStorage.getItem(COUNTER_KEY));
+    counterState.value = Number.isSafeInteger(storedValue) ? storedValue : 0;
   } catch (e) {}
   document.getElementById('counter-value').textContent = counterState.value;
 }
 
+function showCounterStatus(message) {
+  const status = document.getElementById('counter-storage-status');
+  if (status) { status.textContent = message; status.hidden = !message; }
+}
+
+async function changeCounter(nextValue) {
+  const task = () => {
+    try {
+      // Read inside the lock: another tab may have changed the stored count.
+      const stored = Number(localStorage.getItem(COUNTER_KEY));
+      const current = Number.isSafeInteger(stored) ? stored : 0;
+      const value = nextValue(current);
+      if (!Number.isSafeInteger(value)) {
+        showCounterStatus('已达到计数范围上限。');
+        return false;
+      }
+      localStorage.setItem(COUNTER_KEY, String(value));
+      counterState.value = value;
+      document.getElementById('counter-value').textContent = value;
+      showCounterStatus('');
+      return true;
+    } catch (e) {
+      showCounterStatus('无法保存到浏览器，本次计数未保留。');
+      return false;
+    }
+  };
+  try {
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : null;
+    if (locks && typeof locks.request === 'function') {
+      return await locks.request('toolbox-counter-write', task);
+    }
+    // Reuse the toolbox presence guard on browsers without Web Locks.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    if (hasAnotherPriceTab()) {
+      showCounterStatus('当前浏览器不支持跨标签写入锁；请关闭其他工具箱标签页后重试。');
+      return false;
+    }
+    return task();
+  } catch (e) {
+    showCounterStatus('无法取得写入锁，请重试。');
+    return false;
+  }
+}
+
 function updateCounter(delta) {
-  counterState.value += delta;
-  document.getElementById('counter-value').textContent = counterState.value;
-  try { localStorage.setItem(COUNTER_KEY, String(counterState.value)); } catch (e) {}
+  return changeCounter(value => value + delta);
 }
 
 function resetCounter() {
-  counterState.value = 0;
-  document.getElementById('counter-value').textContent = 0;
-  try { localStorage.setItem(COUNTER_KEY, '0'); } catch (e) {}
+  return changeCounter(() => 0);
 }
 
 function initCounter() {
   loadCounter();
+  window.addEventListener('storage', e => {
+    if (e.key === COUNTER_KEY || e.key === null) loadCounter();
+  });
   document.getElementById('btn-plus').addEventListener('click', () => updateCounter(1));
   document.getElementById('btn-minus').addEventListener('click', () => updateCounter(-1));
   document.getElementById('btn-reset').addEventListener('click', resetCounter);
@@ -671,8 +711,9 @@ async function saveEditItem(form, groupId, itemId) {
     item.packSize = fields.packSize;
     item.packCount = fields.packCount;
     item.totalPrice = fields.totalPrice;
-    clearEditingIfMatches(groupId, itemId);
-    return saveGroups();
+    const saved = saveGroups();
+    if (saved) clearEditingIfMatches(groupId, itemId);
+    return saved;
   });
   if (!saved) return;
   const group = groups.find(g => g.id === groupId);
@@ -706,14 +747,14 @@ function renderGroupContent(group) {
                 <div class="item-spec">${item.unitWeight}g × ${item.packSize}件 × ${item.packCount}套</div>
               </div>
             </div>
-            <form class="item-edit-form" data-group-id="${group.id}" data-item-id="${item.id}">
+            <form class="item-edit-form" data-group-id="${group.id}" data-item-id="${item.id}" novalidate>
               <div class="form-field full-width">
                 <label>商品名称</label>
                 <input class="input" type="text" data-field="name" value="${escHtml(item.name)}" aria-label="商品名称">
               </div>
               <div class="form-field">
                 <label>单品重量 (g)</label>
-                <input class="input" type="number" min="0.01" step="0.01" data-field="unitWeight" value="${item.unitWeight}" required aria-label="单品重量，单位克">
+                <input class="input" type="number" min="0" step="any" data-field="unitWeight" value="${item.unitWeight}" required aria-label="单品重量，单位克">
               </div>
               <div class="form-field">
                 <label>套装内数量</label>
@@ -725,7 +766,7 @@ function renderGroupContent(group) {
               </div>
               <div class="form-field">
                 <label>总价 (元)</label>
-                <input class="input" type="number" min="0.01" step="0.01" data-field="totalPrice" value="${item.totalPrice}" required aria-label="总价，单位元">
+                <input class="input" type="number" min="0" step="any" data-field="totalPrice" value="${item.totalPrice}" required aria-label="总价，单位元">
               </div>
               <div class="item-edit-actions">
                 <button type="button" class="btn-ghost" data-action="cancel-edit" data-group-id="${group.id}" data-item-id="${item.id}">取消</button>
@@ -770,6 +811,36 @@ function renderGroupContent(group) {
   return { summaryHtml, itemsHtml };
 }
 
+// Drafts belong to their group/item, not to the DOM nodes a render replaces.
+// An edit is restored only if its form still exists after conflict handling.
+function preservePriceDrafts(root, render) {
+  const drafts = Array.from(root.querySelectorAll('form[data-group-id]'), form => ({
+    groupId: form.dataset.groupId,
+    itemId: form.dataset.itemId,
+    fields: Array.from(form.querySelectorAll('[data-field]'), input => ({
+      field: input.dataset.field, value: input.value,
+      focused: input === document.activeElement,
+      start: input.selectionStart, end: input.selectionEnd,
+    })),
+  }));
+  render();
+  for (const form of root.querySelectorAll('form[data-group-id]')) {
+    const draft = drafts.find(d => d.groupId === form.dataset.groupId && d.itemId === form.dataset.itemId);
+    if (!draft) continue;
+    for (const input of form.querySelectorAll('[data-field]')) {
+      const field = draft.fields.find(f => f.field === input.dataset.field);
+      if (!field) continue;
+      input.value = field.value;
+      if (field.focused) {
+        input.focus({ preventScroll: true });
+        if (field.start != null && typeof input.setSelectionRange === 'function') {
+          input.setSelectionRange(field.start, field.end);
+        }
+      }
+    }
+  }
+}
+
 // Re-render just one group in place — preserves the add-form inputs and
 // the scroll position of the rest of the page. Falls back to a full
 // render if the group's card isn't in the DOM yet.
@@ -786,10 +857,15 @@ function renderGroup(group) {
   }
 
   const itemsDiv = card.querySelector(':scope > .group-items');
-  if (itemsDiv) itemsDiv.innerHTML = itemsHtml;
+  if (itemsDiv) preservePriceDrafts(itemsDiv, () => { itemsDiv.innerHTML = itemsHtml; });
 }
 
 function renderPriceList() {
+  const list = document.getElementById('price-list');
+  preservePriceDrafts(list, renderPriceListContent);
+}
+
+function renderPriceListContent() {
   const list = document.getElementById('price-list');
   const empty = document.getElementById('price-empty');
 
@@ -813,10 +889,10 @@ function renderPriceList() {
         <form class="group-add-item-form" data-group-id="${group.id}" novalidate>
           <div class="group-add-row">
             <input class="input" type="text" placeholder="商品名称" data-field="name" aria-label="商品名称">
-            <input class="input" type="number" min="0.01" step="0.01" placeholder="单品重量(g) *" data-field="unitWeight" aria-label="单品重量，单位克" required>
+            <input class="input" type="number" min="0" step="any" placeholder="单品重量(g) *" data-field="unitWeight" aria-label="单品重量，单位克" required>
             <input class="input" type="number" min="1" step="1" placeholder="件数" data-field="packSize" value="1" aria-label="套装内数量">
             <input class="input" type="number" min="1" step="1" placeholder="套数" data-field="packCount" value="1" aria-label="套装数量">
-            <input class="input" type="number" min="0.01" step="0.01" placeholder="总价(元) *" data-field="totalPrice" aria-label="总价，单位元" required>
+            <input class="input" type="number" min="0" step="any" placeholder="总价(元) *" data-field="totalPrice" aria-label="总价，单位元" required>
             <button type="submit" class="btn-primary">添加</button>
           </div>
         </form>
@@ -855,7 +931,11 @@ async function handleAddSubmit(form, groupId) {
     packCount: fields.packCount,
     totalPrice: fields.totalPrice,
   };
-  if (await addItemToGroup(groupId, formData)) form.reset();
+  if (await addItemToGroup(groupId, formData)) {
+    // A synchronization render may have replaced the submitted form.
+    const currentForm = document.querySelector('.group-add-item-form[data-group-id="' + groupId + '"]');
+    if (currentForm) currentForm.reset();
+  }
 }
 
 function escHtml(str) {
