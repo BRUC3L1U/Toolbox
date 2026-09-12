@@ -1,0 +1,7 @@
+# Publish only the files required by the website.
+# Add new public assets here when adding references to the page.
+*
+!/index.html
+!/styles.css
+!/app.js
+!/favicon.png

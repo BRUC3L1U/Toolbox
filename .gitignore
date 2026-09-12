@@ -12,3 +12,6 @@ npm-debug.log*
 # Generated browser test results
 /test-results/
 /playwright-report/
+
+# Local Cloudflare state
+/.wrangler/
