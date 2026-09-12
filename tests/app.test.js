@@ -116,10 +116,12 @@ test('fallback presence detects another live tab and ignores stale or own entrie
   ], 'toolbox_price_tab_self', now), false);
 });
 
-test('editing rejects any storage revision change since editing began', () => {
-  assert.equal(hasEditConflict(4, 4), false);
-  assert.equal(hasEditConflict(4, 5), true);
-  assert.equal(hasEditConflict(null, 0), true);
+test('editing compares the target item snapshot, including changes and deletion', () => {
+  const item = { id: 'a', name: '牛奶', totalPrice: 10 };
+  assert.equal(hasEditConflict(item, { ...item }), false);
+  assert.equal(hasEditConflict(item, { ...item, totalPrice: 11 }), true);
+  assert.equal(hasEditConflict(item, null), true);
+  assert.equal(hasEditConflict(null, item), true);
 });
 
 test('group deletion rejects a target changed after confirmation', () => {

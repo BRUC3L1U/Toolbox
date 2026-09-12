@@ -8,7 +8,7 @@
 | --- | --- |
 | 热量换算 | 输入千焦（kJ）或千卡（kcal），另一栏自动换算，结果四舍五入为整数。 |
 | 计数器 | 点击加减或重置，也支持键盘操作。计数自动保存，同一站点的多个标签页会同步。 |
-| 商品比价 | 按品类创建对比组，填写商品重量、件数、套数和总价，按每克单价标出组内最划算的商品。 |
+| 商品比价 | 按品类创建对比组，填写商品重量、件数、套数和总价，突出每 100g 单价，标出组内最划算的商品。 |
 | Boss 计时 | 显示巢穴首领、世界首领的下次刷新时间和倒计时，临近刷新时高亮提醒。 |
 
 比价时，件数指一套中有几件，套数指买了几套。比如每件 100 g、每套 3 件、买 2 套，共花 24 元，总重量就是 600 g，单价为 0.04 元/g，也就是每 100 g 花 4 元。不同规格的同类商品放进同一组即可比较。
@@ -52,6 +52,16 @@ node --check app.js
 node --test tests/*.test.js
 ```
 
-[tests/app.test.js](tests/app.test.js) 检查换算、输入校验、计时边界等基础逻辑；[tests/runtime.test.js](tests/runtime.test.js) 覆盖跨标签计数、表单草稿恢复、保存失败回滚和编辑冲突。运行时测试使用 DOM 与存储替身，修改交互后仍需在浏览器中验证。
+[tests/app.test.js](tests/app.test.js) 检查换算、输入校验、计时边界等基础逻辑；[tests/runtime.test.js](tests/runtime.test.js) 覆盖跨标签计数、表单草稿恢复、保存失败回滚和编辑冲突。运行时测试使用 DOM 与存储替身；[浏览器测试](tests/browser/ui.test.cjs) 则在真实 Chromium 中检查编辑、焦点、错误反馈、跨标签同步和响应式布局。
 
-推送到 `main` 或提交拉取请求时，[GitHub Actions](.github/workflows/ci.yml) 会自动运行上述检查。
+运行浏览器测试前，需要安装开发依赖和 Chromium，网页本身仍无需构建：
+
+```bash
+npm ci
+npx playwright install chromium
+npm run test:browser
+```
+
+浏览器测试覆盖 320、375、640、768 和 1440px 宽度。失败截图保存在 `test-results/`。如需使用已安装的 Chrome，可通过 `CHROME_EXECUTABLE_PATH` 指定可执行文件路径。
+
+推送到 `main` 或提交拉取请求时，[GitHub Actions](.github/workflows/ci.yml) 会自动运行两组测试，并保留浏览器测试的失败截图。

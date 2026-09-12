@@ -1,6 +1,14 @@
-# macOS
+# macOS metadata
 .DS_Store
 
-# Editor / tooling
+# Local editor and agent data
 .claude/
 .workbuddy/
+
+# Installed Node.js dependencies and npm debug logs
+node_modules/
+npm-debug.log*
+
+# Generated browser test results
+/test-results/
+/playwright-report/

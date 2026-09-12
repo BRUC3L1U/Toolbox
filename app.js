@@ -128,19 +128,26 @@ function initEnergyConverter() {
   function bind(source, target, convert) {
     source.addEventListener('input', function() {
       const raw = this.value.trim();
+      setInputError(target, '');
       if (raw === '') {
-        this.classList.remove('error');
+        setInputError(this, '');
         target.value = '';
         return;
       }
       const val = parseNonNegativeFiniteNumber(raw);
       if (val === null) {
-        this.classList.add('error');
+        setInputError(this, '请输入大于或等于 0 的数字。');
         target.value = '';
         return;
       }
-      this.classList.remove('error');
-      target.value = Math.round(convert(val));
+      setInputError(this, '');
+      const result = convert(val);
+      if (!Number.isFinite(result)) {
+        setInputError(this, '数值过大，请缩小后重试。');
+        target.value = '';
+        return;
+      }
+      target.value = Math.round(result);
     });
   }
 
@@ -272,7 +279,7 @@ const PRICE_PRESENCE_TTL_MS = 5000;
 let groups = []; // [{ id, name, items: [...] }]
 let editingId = null;
 let editingGroupId = null;
-let editingBaseRevision = null;
+let editingBaseItem = null;
 let groupsRevision = 0;
 let persistedGroupsSnapshot = [];
 let priceStatusTimer = null;
@@ -456,8 +463,21 @@ function withPriceStorageLock(task) {
   return runWithPriceStorageLock(lockManager, task, runFallbackPriceWrite);
 }
 
-function hasEditConflict(baseRevision, latestRevision) {
-  return baseRevision !== latestRevision;
+function hasEditConflict(expectedItem, latestItem) {
+  return !expectedItem || !latestItem || JSON.stringify(expectedItem) !== JSON.stringify(latestItem);
+}
+
+function findStoredItem(state, groupId, itemId) {
+  const group = state.groups.find(group => group.id === groupId);
+  return group && group.items.find(item => item.id === itemId);
+}
+
+function synchronizeEdit(state) {
+  if (editingId !== null && hasEditConflict(editingBaseItem, findStoredItem(state, editingGroupId, editingId))) {
+    editingId = null;
+    editingGroupId = null;
+    editingBaseItem = null;
+  }
 }
 
 function hasGroupSnapshotConflict(expectedGroup, latestGroup) {
@@ -484,10 +504,8 @@ async function mutateGroups(mutator) {
   return withPriceStorageLock(async () => {
     const latest = readStoredGroups();
     if (!latest.storageError && latest.revision !== groupsRevision) {
+      synchronizeEdit(latest);
       applyStoredGroups(latest);
-      editingId = null;
-      editingGroupId = null;
-      editingBaseRevision = null;
       renderPriceList();
       showPriceStatus('已同步其他标签页的修改。');
     }
@@ -504,12 +522,29 @@ function calcUnitPrice(item) {
 
 const PRICE_EPSILON = 1e-9;
 
-// Briefly flag an input as invalid so the user sees *why* nothing happened.
-function flagInputError(el) {
+function setInputError(el, message) {
   if (!el) return;
-  el.classList.add('error');
-  clearTimeout(el._errorTimer);
-  el._errorTimer = setTimeout(() => el.classList.remove('error'), 2000);
+  el.classList.toggle('error', !!message);
+  el.setAttribute('aria-invalid', message ? 'true' : 'false');
+  let errorId = el.dataset.errorId;
+  if (!errorId && !message) return;
+  if (!errorId) {
+    errorId = 'field-error-' + uid();
+    el.dataset.errorId = errorId;
+    const error = document.createElement('span');
+    error.id = errorId;
+    error.className = 'field-error';
+    error.setAttribute('aria-live', 'polite');
+    el.insertAdjacentElement('afterend', error);
+    el.setAttribute('aria-describedby', [el.getAttribute('aria-describedby'), errorId].filter(Boolean).join(' '));
+  }
+  const error = document.getElementById(errorId);
+  if (error) { error.textContent = message; error.hidden = !message; }
+}
+
+function flagInputError(el) {
+  setInputError(el, '请输入组名称。');
+  el?.focus();
 }
 
 // Compute { id, up } for every item in one pass so downstream code
@@ -528,10 +563,8 @@ function findCheapestInGroup(unitPrices) {
 function saveGroups() {
   const latest = readStoredGroups();
   if (!latest.storageError && latest.revision !== groupsRevision) {
+    synchronizeEdit(latest);
     applyStoredGroups(latest);
-    editingId = null;
-    editingGroupId = null;
-    editingBaseRevision = null;
     renderPriceList();
     showPriceStatus('检测到其他标签页的新修改，已保留最新数据；请重试刚才的操作。');
     return false;
@@ -606,7 +639,7 @@ async function deleteGroup(groupId) {
     if (editingGroupId === groupId) {
       editingId = null;
       editingGroupId = null;
-      editingBaseRevision = null;
+      editingBaseItem = null;
     }
     return saveGroups();
   });
@@ -640,7 +673,7 @@ async function deleteItemFromGroup(groupId, itemId) {
     if (editingGroupId === groupId && editingId === itemId) {
       editingId = null;
       editingGroupId = null;
-      editingBaseRevision = null;
+      editingBaseItem = null;
     }
   });
   if (!saved) { renderPriceList(); return; }
@@ -649,16 +682,23 @@ async function deleteItemFromGroup(groupId, itemId) {
 }
 
 function startEditItem(groupId, itemId) {
+  const item = findStoredItem({ groups }, groupId, itemId);
+  if (!item) return;
   const previousGroupId = editingGroupId;
   editingGroupId = groupId;
   editingId = itemId;
-  editingBaseRevision = groupsRevision;
+  editingBaseItem = { ...item };
   if (previousGroupId && previousGroupId !== groupId) {
     const previousGroup = groups.find(g => g.id === previousGroupId);
     if (previousGroup) renderGroup(previousGroup);
   }
   const group = groups.find(g => g.id === groupId);
   if (group) renderGroup(group);
+  document.querySelector('.item-edit-form[data-group-id="' + groupId + '"][data-item-id="' + itemId + '"] [data-field="name"]')?.focus();
+}
+
+function focusItemAction(groupId, itemId) {
+  document.querySelector('[data-action="edit"][data-group-id="' + groupId + '"][data-item-id="' + itemId + '"]')?.focus({ preventScroll: true });
 }
 
 function cancelEdit(groupId, itemId) {
@@ -668,12 +708,14 @@ function cancelEdit(groupId, itemId) {
     return;
   }
   const prevGroupId = editingGroupId;
+  const prevItemId = editingId;
   editingId = null;
   editingGroupId = null;
-  editingBaseRevision = null;
+  editingBaseItem = null;
   if (prevGroupId != null) {
     const group = groups.find(g => g.id === prevGroupId);
     if (group) renderGroup(group);
+    focusItemAction(prevGroupId, prevItemId);
   }
 }
 
@@ -684,7 +726,7 @@ function clearEditingIfMatches(groupId, itemId) {
   if (editingGroupId !== groupId || editingId !== itemId) return;
   editingId = null;
   editingGroupId = null;
-  editingBaseRevision = null;
+  editingBaseItem = null;
 }
 
 async function saveEditItem(form, groupId, itemId) {
@@ -692,14 +734,15 @@ async function saveEditItem(form, groupId, itemId) {
   if (!fields) return;
   const nameEl = form.querySelector('[data-field="name"]');
 
-  const baseRevision = editingBaseRevision;
+  const baseItem = editingBaseItem;
   const saved = await withPriceStorageLock(async () => {
     const latest = readStoredGroups();
-    if (!latest.storageError && hasEditConflict(baseRevision, latest.revision)) {
+    if (!latest.storageError && hasEditConflict(baseItem, findStoredItem(latest, groupId, itemId))) {
       applyStoredGroups(latest);
       clearEditingIfMatches(groupId, itemId);
       renderPriceList();
-      showPriceStatus('该商品在其他标签页中已发生变化，已保留最新数据；请重新编辑。');
+      showPriceStatus('该商品已发生变化，已保留最新数据；请重新编辑。');
+      if (editingId === null) focusItemAction(groupId, itemId);
       return false;
     }
     if (!latest.storageError) applyStoredGroups(latest);
@@ -718,6 +761,7 @@ async function saveEditItem(form, groupId, itemId) {
   if (!saved) return;
   const group = groups.find(g => g.id === groupId);
   if (group) renderGroup(group);
+  if (editingId === null) focusItemAction(groupId, itemId);
 }
 
 // Build the summary + items HTML for a single group. Shared by the full
@@ -749,24 +793,24 @@ function renderGroupContent(group) {
             </div>
             <form class="item-edit-form" data-group-id="${group.id}" data-item-id="${item.id}" novalidate>
               <div class="form-field full-width">
-                <label>商品名称</label>
-                <input class="input" type="text" data-field="name" value="${escHtml(item.name)}" aria-label="商品名称">
+                <label for="edit-${group.id}-${item.id}-name">商品名称</label>
+                <input id="edit-${group.id}-${item.id}-name" class="input" type="text" data-field="name" value="${escHtml(item.name)}" aria-label="商品名称">
               </div>
               <div class="form-field">
-                <label>单品重量 (g)</label>
-                <input class="input" type="number" min="0" step="any" data-field="unitWeight" value="${item.unitWeight}" required aria-label="单品重量，单位克">
+                <label for="edit-${group.id}-${item.id}-unitWeight">单件重量（g）</label>
+                <input id="edit-${group.id}-${item.id}-unitWeight" class="input" type="number" min="0" step="any" data-field="unitWeight" value="${item.unitWeight}" required aria-label="单品重量，单位克">
               </div>
               <div class="form-field">
-                <label>套装内数量</label>
-                <input class="input" type="number" min="1" step="1" data-field="packSize" value="${item.packSize}" aria-label="套装内数量">
+                <label for="edit-${group.id}-${item.id}-packSize">每套件数</label>
+                <input id="edit-${group.id}-${item.id}-packSize" class="input" type="number" min="1" step="1" data-field="packSize" value="${item.packSize}" aria-label="套装内数量">
               </div>
               <div class="form-field">
-                <label>套装数量</label>
-                <input class="input" type="number" min="1" step="1" data-field="packCount" value="${item.packCount}" aria-label="套装数量">
+                <label for="edit-${group.id}-${item.id}-packCount">购买套数</label>
+                <input id="edit-${group.id}-${item.id}-packCount" class="input" type="number" min="1" step="1" data-field="packCount" value="${item.packCount}" aria-label="套装数量">
               </div>
               <div class="form-field">
-                <label>总价 (元)</label>
-                <input class="input" type="number" min="0" step="any" data-field="totalPrice" value="${item.totalPrice}" required aria-label="总价，单位元">
+                <label for="edit-${group.id}-${item.id}-totalPrice">总价（元）</label>
+                <input id="edit-${group.id}-${item.id}-totalPrice" class="input" type="number" min="0" step="any" data-field="totalPrice" value="${item.totalPrice}" required aria-label="总价，单位元">
               </div>
               <div class="item-edit-actions">
                 <button type="button" class="btn-ghost" data-action="cancel-edit" data-group-id="${group.id}" data-item-id="${item.id}">取消</button>
@@ -780,10 +824,9 @@ function renderGroupContent(group) {
                 <div class="item-spec">${item.unitWeight}g × ${item.packSize}件 × ${item.packCount}套</div>
               </div>
               <div class="item-meta">
-                <div class="item-total-price">¥${item.totalPrice.toFixed(2)} 元</div>
-                <div class="item-total-weight">${totalWeight.toFixed(1)} g</div>
+                <div class="item-unit-price-100">${up !== null ? (up * 100).toFixed(2) : '--'} <span>元/100g</span></div>
                 <div class="item-unit-price">${up !== null ? up.toFixed(4) : '--'} 元/g</div>
-                <div class="item-unit-price-100">≈ ${up !== null ? (up * 100).toFixed(2) : '--'} 元/100g</div>
+                <div class="item-total-price">共 ¥${item.totalPrice.toFixed(2)} · ${totalWeight.toFixed(1)} g</div>
               </div>
             </div>
             <div class="item-actions">
@@ -887,13 +930,29 @@ function renderPriceListContent() {
       <div class="group-items">${itemsHtml}</div>
       <div class="group-add-form">
         <form class="group-add-item-form" data-group-id="${group.id}" novalidate>
+          <p class="form-hint">每套件数 × 购买套数 = 总件数</p>
           <div class="group-add-row">
-            <input class="input" type="text" placeholder="商品名称" data-field="name" aria-label="商品名称">
-            <input class="input" type="number" min="0" step="any" placeholder="单品重量(g) *" data-field="unitWeight" aria-label="单品重量，单位克" required>
-            <input class="input" type="number" min="1" step="1" placeholder="件数" data-field="packSize" value="1" aria-label="套装内数量">
-            <input class="input" type="number" min="1" step="1" placeholder="套数" data-field="packCount" value="1" aria-label="套装数量">
-            <input class="input" type="number" min="0" step="any" placeholder="总价(元) *" data-field="totalPrice" aria-label="总价，单位元" required>
-            <button type="submit" class="btn-primary">添加</button>
+            <div class="form-field field-name">
+              <label for="add-${group.id}-name">商品名称</label>
+              <input id="add-${group.id}-name" class="input" type="text" data-field="name" placeholder="如：纯牛奶" >
+            </div>
+            <div class="form-field field-unitWeight">
+              <label for="add-${group.id}-unitWeight">单件重量（g）</label>
+              <input id="add-${group.id}-unitWeight" class="input" type="number" data-field="unitWeight" placeholder="如：250" min="0" step="any" required>
+            </div>
+            <div class="form-field field-totalPrice">
+              <label for="add-${group.id}-totalPrice">总价（元）</label>
+              <input id="add-${group.id}-totalPrice" class="input" type="number" data-field="totalPrice" placeholder="如：59.9" min="0" step="any" required>
+            </div>
+            <div class="form-field field-packSize">
+              <label for="add-${group.id}-packSize">每套件数</label>
+              <input id="add-${group.id}-packSize" class="input" type="number" data-field="packSize" placeholder="" min="1" step="1" value="1">
+            </div>
+            <div class="form-field field-packCount">
+              <label for="add-${group.id}-packCount">购买套数</label>
+              <input id="add-${group.id}-packCount" class="input" type="number" data-field="packCount" placeholder="" min="1" step="1" value="1">
+            </div>
+            <button type="submit" class="btn-primary">添加商品</button>
           </div>
         </form>
       </div>
@@ -903,22 +962,32 @@ function renderPriceListContent() {
 
 // Shared validation for the add-item and edit-item forms: parse all four
 // numeric fields and flag every invalid one so the user sees all errors.
+const ITEM_FIELD_PARSERS = {
+  unitWeight: parsePositiveFiniteNumber,
+  packSize: parsePositiveInteger,
+  packCount: parsePositiveInteger,
+  totalPrice: parsePositiveFiniteNumber,
+};
+
+function validateItemField(el) {
+  const field = el.dataset.field;
+  const value = ITEM_FIELD_PARSERS[field](el.value);
+  const message = field === 'packSize' || field === 'packCount'
+    ? '请输入大于 0 的整数。' : '请输入大于 0 的数字。';
+  setInputError(el, value === null ? message : '');
+  return value;
+}
+
 function parseItemFields(form) {
-  const parsers = {
-    unitWeight: parsePositiveFiniteNumber,
-    packSize: parsePositiveInteger,
-    packCount: parsePositiveInteger,
-    totalPrice: parsePositiveFiniteNumber,
-  };
   const fields = {};
-  let invalid = false;
-  for (const [field, parse] of Object.entries(parsers)) {
+  let firstInvalid = null;
+  for (const field of Object.keys(ITEM_FIELD_PARSERS)) {
     const el = form.querySelector('[data-field="' + field + '"]');
-    const value = parse(el.value);
-    if (value === null) { flagInputError(el); invalid = true; }
-    fields[field] = value;
+    fields[field] = validateItemField(el);
+    if (fields[field] === null && !firstInvalid) firstInvalid = el;
   }
-  return invalid ? null : fields;
+  if (firstInvalid) firstInvalid.focus();
+  return firstInvalid ? null : fields;
 }
 
 async function handleAddSubmit(form, groupId) {
@@ -971,18 +1040,9 @@ function initPriceCalculator() {
         return !prev || JSON.stringify(prev) !== JSON.stringify(g);
       })
       .map(g => g.id));
-    // An edit whose group is byte-identical stays open; just re-base it so
-    // the next save passes the revision check.
-    const keepEditing = editingGroupId != null && !changedIds.has(editingGroupId) &&
-      stored.groups.some(g => g.id === editingGroupId);
+    // Other items may change while this item's draft remains valid.
+    synchronizeEdit(stored);
     applyStoredGroups(stored);
-    if (keepEditing) {
-      editingBaseRevision = stored.revision;
-    } else {
-      editingId = null;
-      editingGroupId = null;
-      editingBaseRevision = null;
-    }
     if (previousGroups.some(p => !stored.groups.some(g => g.id === p.id))) {
       renderPriceList();
     } else {
@@ -998,6 +1058,11 @@ function initPriceCalculator() {
   });
 
   const list = document.getElementById('price-list');
+
+  list.addEventListener('input', e => {
+    const el = e.target;
+    if (el.dataset.field in ITEM_FIELD_PARSERS && el.getAttribute('aria-invalid') === 'true') validateItemField(el);
+  });
 
   // Single delegated click handler for every action button inside the list.
   list.addEventListener('click', async function(e) {
@@ -1027,6 +1092,10 @@ function initPriceCalculator() {
 
   const createGroupForm = document.getElementById('create-group-form');
   if (createGroupForm) {
+    const nameInput = document.getElementById('new-group-name');
+    nameInput.addEventListener('input', () => {
+      if (nameInput.value.trim()) setInputError(nameInput, '');
+    });
     createGroupForm.addEventListener('submit', async function(e) {
       e.preventDefault();
       const nameInput = document.getElementById('new-group-name');

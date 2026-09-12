@@ -39,6 +39,12 @@ function serialLocks() {
   let queue = Promise.resolve();
   return { request(name, task) { const result = queue.then(task); queue = result.catch(() => {}); return result; } };
 }
+function fieldForm(values = {}) {
+  return { querySelector(selector) {
+    const field = selector.match(/data-field="([^"]+)"/)[1];
+    return { value: values[field] ?? '1', dataset: { field }, classList: { toggle() {} }, setAttribute() {} };
+  } };
+}
 const group = { id: 'g', name: '食品', items: [] };
 
 test('counter reads and writes under the shared lock across tabs', async () => {
@@ -81,7 +87,8 @@ test('full price renders retain existing group form drafts', async () => {
 
 test('added fractional quantities remain editable under the same validation', () => {
   const tab = runtime();
-  const result = tab.run(`parseItemFields({querySelector(selector) {return {value: selector.includes('unitWeight') ? '0.001' : '1'};}})`);
+  tab.context.form = fieldForm({ unitWeight: '0.001' });
+  const result = tab.run('parseItemFields(form)');
   assert.equal(result.unitWeight, 0.001);
   const html = tab.run(`editingId='i'; editingGroupId='g'; renderGroupContent({id:'g',items:[{id:'i',name:'A',unitWeight:0.001,packSize:1,packCount:1,totalPrice:1}]}).itemsHtml`);
   assert.match(html, /<form[^>]*class="item-edit-form"[^>]*novalidate/);
@@ -138,7 +145,7 @@ test('stale price edit cannot overwrite a newer persisted item', async () => {
   tab.run('renderPriceList = () => {}; renderGroup = () => {}; loadGroups(); startEditItem("g", "i")');
   const latest = JSON.stringify({v: 1, revision: 2, groups: [{...group, items: [{...item, name: '其他标签修改'}]}]});
   storage.set('toolbox_price_groups', latest);
-  tab.context.form = {querySelector(selector) { return {value: selector.includes('name') ? '过期修改' : '1'}; }};
+  tab.context.form = fieldForm({ name: '过期修改' });
   await tab.run('saveEditItem(form, "g", "i")');
   assert.equal(storage.get('toolbox_price_groups'), latest);
   assert.equal(tab.run('groups[0].items[0].name'), '其他标签修改');
@@ -150,8 +157,19 @@ test('failed price edit retains its editing session for retry', async () => {
   const storage = new Map([['toolbox_price_groups', JSON.stringify({v: 1, revision: 1, groups: [{...group, items: [item]}]})]]);
   const tab = runtime(storage, serialLocks());
   tab.run('renderPriceList = () => {}; renderGroup = () => {}; loadGroups(); startEditItem("g", "i"); localStorage.setItem = () => { throw new Error("quota"); }');
-  tab.context.form = {querySelector(selector) { return {value: selector.includes('name') ? '修改草稿' : '1'}; }};
+  tab.context.form = fieldForm({ name: '修改草稿' });
   await tab.run('saveEditItem(form, "g", "i")');
   assert.equal(tab.run('editingId'), 'i');
   assert.equal(tab.run('groups[0].items[0].name'), '原商品');
+});
+
+test('last-moment unrelated storage changes preserve the current edit for retry', () => {
+  const item = {id: 'i', name: '原商品', unitWeight: 100, packSize: 1, packCount: 1, totalPrice: 10};
+  const storage = new Map([['toolbox_price_groups', JSON.stringify({v: 1, revision: 1, groups: [{...group, items: [item]}]})]]);
+  const tab = runtime(storage, serialLocks());
+  tab.run('renderPriceList = () => {}; renderGroup = () => {}; loadGroups(); startEditItem("g", "i")');
+  storage.set('toolbox_price_groups', JSON.stringify({v: 1, revision: 2, groups: [{...group, items: [item]}, {id: 'other', name: '其他组', items: []}]}));
+  assert.equal(tab.run('saveGroups()'), false);
+  assert.equal(tab.run('editingId'), 'i');
+  assert.equal(tab.run('groups.length'), 2);
 });
