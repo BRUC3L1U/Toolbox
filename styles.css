@@ -522,14 +522,6 @@ button { cursor: pointer; background: none; border: none; }
 @keyframes bossFlash { 0% { opacity: 1; } 40% { opacity: .35; } 100% { opacity: 1; } }
 .boss-flash { animation: bossFlash .35s ease-out; }
 
-.boss-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  margin-bottom: var(--space-6);
-}
-.boss-toolbar .page-title { margin-bottom: 0; }
 .boss-card { transition: box-shadow var(--transition-interactive), border-color var(--transition-interactive); }
 .boss-card.boss-soon {
   border-color: var(--boss-accent);
@@ -570,7 +562,6 @@ button { cursor: pointer; background: none; border: none; }
   .boss-cards { max-width: 480px; margin-inline: auto; }
   .boss-card { padding: var(--space-8) var(--space-6); }
   .boss-time-number { font-size: var(--text-xl); padding: var(--space-2) var(--space-3); }
-  .boss-toolbar { flex-wrap: wrap; }
 }
 
 @media (max-width: 767px) {
