@@ -3,9 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn, execFile } = require('node:child_process');
+const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const exec = promisify(execFile);
+const { unstable_startWorker } = require('wrangler');
 const root = path.resolve(__dirname, '../..');
 const cli = path.join(root, 'node_modules/wrangler/wrangler-dist/cli.js');
 const publicFiles = ['index.html', 'app.js', 'styles.css', 'favicon.png'];
@@ -13,14 +14,9 @@ const publicFiles = ['index.html', 'app.js', 'styles.css', 'favicon.png'];
 test('Workers deployment publishes only website assets', { timeout: 60000 }, async t => {
   // Isolate Wrangler's generated state and seed files that must never be public.
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'toolbox-assets-'));
-  let child, exited;
+  let worker;
   t.after(async () => {
-    if (child) {
-      if (child.exitCode === null) child.kill('SIGTERM');
-      const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
-      await exited;
-      clearTimeout(timer);
-    }
+    if (worker) await worker.dispose();
     await fs.rm(dir, { recursive: true, force: true });
   });
   for (const file of [...publicFiles, '.assetsignore', 'wrangler.jsonc', 'package.json', 'package-lock.json', 'README.md']) {
@@ -41,20 +37,14 @@ test('Workers deployment publishes only website assets', { timeout: 60000 }, asy
   await fs.writeFile(path.join(dir, '.assetsignore'), ignore);
   await dryRun();
 
-  child = spawn(process.execPath, [cli, 'dev', '--local', '--ip', '127.0.0.1', '--port', '0', '--inspector-port', '0'], { cwd: dir, env: options.env, stdio: ['ignore', 'pipe', 'pipe'] });
-  exited = new Promise(resolve => child.once('close', resolve));
-  let output = '';
-  const address = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Wrangler startup timed out: ' + output)), 20000);
-    const read = chunk => {
-      output += chunk.toString();
-      const match = output.match(/Ready on (http:\/\/127\.0\.0\.1:\d+)/);
-      if (match) { clearTimeout(timer); resolve(match[1]); }
-    };
-    child.stdout.on('data', read); child.stderr.on('data', read);
-    child.once('error', error => { clearTimeout(timer); reject(error); });
-    child.once('exit', code => { clearTimeout(timer); reject(new Error('Wrangler exited ' + code + ': ' + output)); });
+  // The CLI's human-readable ready line is not an API. Disable watchers so
+  // generated runtime state cannot trigger asset reload loops on Linux.
+  worker = await unstable_startWorker({
+    config: path.join(dir, 'wrangler.jsonc'),
+    dev: { remote: false, watch: false, persist: false, server: { hostname: '127.0.0.1', port: 0 } },
   });
+  await worker.ready;
+  const address = (await worker.url).origin;
   for (const file of publicFiles) {
     const response = await fetch(address + (file === 'index.html' ? '/' : '/' + file));
     assert.equal(response.status, 200, file);
