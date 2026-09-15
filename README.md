@@ -64,4 +64,12 @@ npm run test:browser
 
 浏览器测试覆盖 320、375、640、768 和 1440px 宽度。失败截图保存在 `test-results/`。如需使用已安装的 Chrome，可通过 `CHROME_EXECUTABLE_PATH` 指定可执行文件路径。
 
-推送到 `main` 或提交拉取请求时，[GitHub Actions](.github/workflows/ci.yml) 会自动运行两组测试，并保留浏览器测试的失败截图。
+推送到 `main` 或提交拉取请求时，[GitHub Actions](.github/workflows/ci.yml) 会自动运行单元、浏览器和部署资源三组测试，并保留浏览器测试的失败截图。
+
+部署资源检查使用本地 Wrangler，不需要 Cloudflare 登录，也不会发布网站：
+
+```bash
+npm run test:deploy
+```
+
+它会验证部署预检、网站文件内容，以及依赖、配置和测试文件的 404 响应。部署由 `wrangler.jsonc` 配置，`.assetsignore` 仅允许四个网站文件；新增图片、脚本等公开资源时，需要同步更新白名单和部署测试。

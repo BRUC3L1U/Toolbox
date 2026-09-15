@@ -246,6 +246,7 @@ button { cursor: pointer; background: none; border: none; }
 
 /* ===== COUNTER ===== */
 .counter-card {
+  container-type: inline-size;
   max-width: 400px;
   margin: 0 auto;
   text-align: center;
@@ -260,6 +261,8 @@ button { cursor: pointer; background: none; border: none; }
   margin: var(--space-8) 0;
   line-height: 1.1;
 }
+
+.counter-display.counter-long { font-size: 1rem; font-size: clamp(1rem, 5cqi, 1.75rem); }
 
 .counter-actions {
   display: flex;
@@ -545,7 +548,9 @@ button { cursor: pointer; background: none; border: none; }
   }
   .tablist { flex: 1 0 100%; justify-content: center; }
   .tab-btn { padding: var(--space-2) var(--space-3); font-size: var(--text-xs); }
-  .converter-row { flex-direction: column; gap: var(--space-3); }
+  .converter-row { flex-direction: column; align-items: stretch; gap: var(--space-3); }
+  .converter-field { width: 100%; }
+  .converter-arrows { align-self: center; }
   .converter-arrows { transform: rotate(90deg); margin-top: 0; }
   .item-card-inner { flex-direction: column; }
   .item-meta { text-align: left; }

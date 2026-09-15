@@ -204,3 +204,17 @@ test('cheapest detection preserves ties', () => {
     { id: 'c', up: 0.2 },
   ]), ['a', 'b']);
 });
+
+
+test('stored items with overflowing derived prices are rejected without losing valid items', () => {
+  const base = { id: 'ok', name: '正常商品', unitWeight: 100, packSize: 1, packCount: 1, totalPrice: 10 };
+  const result = decodeStoredGroups(JSON.stringify({ v: 1, revision: 1, groups: [{ id: 'g', name: '对比', items: [
+    base,
+    { ...base, id: 'weight-overflow', unitWeight: 1e308, packSize: 2 },
+    { ...base, id: 'price-overflow', unitWeight: 1e-308 },
+    { ...base, id: 'hundred-overflow', unitWeight: 1e-305, totalPrice: 100 },
+    { ...base, id: 'price-underflow', unitWeight: 1e308, totalPrice: 1e-308 },
+  ] }] }));
+  assert.equal(result.hadInvalidData, true);
+  assert.deepEqual(result.groups[0].items, [base]);
+});

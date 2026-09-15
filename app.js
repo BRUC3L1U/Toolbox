@@ -162,12 +162,18 @@ function initEnergyConverter() {
 const COUNTER_KEY = 'toolbox_counter';
 let counterState = { value: 0 };
 
+function renderCounterValue(value) {
+  const display = document.getElementById('counter-value');
+  display.textContent = value;
+  display.classList?.toggle('counter-long', String(value).length > 8);
+}
+
 function loadCounter() {
   try {
     const storedValue = Number(localStorage.getItem(COUNTER_KEY));
     counterState.value = Number.isSafeInteger(storedValue) ? storedValue : 0;
   } catch (e) {}
-  document.getElementById('counter-value').textContent = counterState.value;
+  renderCounterValue(counterState.value);
 }
 
 function showCounterStatus(message) {
@@ -188,7 +194,7 @@ async function changeCounter(nextValue) {
       }
       localStorage.setItem(COUNTER_KEY, String(value));
       counterState.value = value;
-      document.getElementById('counter-value').textContent = value;
+      renderCounterValue(value);
       showCounterStatus('');
       return true;
     } catch (e) {
@@ -302,7 +308,8 @@ function normalizeStoredItem(item) {
   const packSize = parsePositiveInteger(item.packSize);
   const packCount = parsePositiveInteger(item.packCount);
   const totalPrice = parsePositiveFiniteNumber(item.totalPrice);
-  if (unitWeight === null || packSize === null || packCount === null || totalPrice === null) return null;
+  if (unitWeight === null || packSize === null || packCount === null || totalPrice === null ||
+      calcUnitPrice({ unitWeight, packSize, packCount, totalPrice }) === null) return null;
   return {
     id: item.id,
     name: typeof item.name === 'string' ? item.name : '',
@@ -516,8 +523,10 @@ async function mutateGroups(mutator) {
 
 function calcUnitPrice(item) {
   const totalWeight = item.unitWeight * item.packSize * item.packCount;
-  if (totalWeight <= 0) return null;
-  return item.totalPrice / totalWeight;
+  const unitPrice = item.totalPrice / totalWeight;
+  if (!Number.isFinite(totalWeight) || totalWeight <= 0 ||
+      !Number.isFinite(unitPrice) || unitPrice <= 0 || !Number.isFinite(unitPrice * 100)) return null;
+  return unitPrice;
 }
 
 const PRICE_EPSILON = 1e-9;
@@ -826,7 +835,7 @@ function renderGroupContent(group) {
               <div class="item-meta">
                 <div class="item-unit-price-100">${up !== null ? (up * 100).toFixed(2) : '--'} <span>元/100g</span></div>
                 <div class="item-unit-price">${up !== null ? up.toFixed(4) : '--'} 元/g</div>
-                <div class="item-total-price">共 ¥${item.totalPrice.toFixed(2)} · ${totalWeight.toFixed(1)} g</div>
+                <div class="item-total-price">共 ¥${item.totalPrice.toFixed(2)} · ${Number.isFinite(totalWeight) && totalWeight > 0 ? totalWeight.toFixed(1) : '--'} g</div>
               </div>
             </div>
             <div class="item-actions">
@@ -860,8 +869,11 @@ function preservePriceDrafts(root, render) {
   const drafts = Array.from(root.querySelectorAll('form[data-group-id]'), form => ({
     groupId: form.dataset.groupId,
     itemId: form.dataset.itemId,
+    calculationError: form.dataset.calculationError,
     fields: Array.from(form.querySelectorAll('[data-field]'), input => ({
       field: input.dataset.field, value: input.value,
+      error: input.getAttribute?.('aria-invalid') === 'true'
+        ? document.getElementById(input.dataset.errorId)?.textContent : '',
       focused: input === document.activeElement,
       start: input.selectionStart, end: input.selectionEnd,
     })),
@@ -870,10 +882,12 @@ function preservePriceDrafts(root, render) {
   for (const form of root.querySelectorAll('form[data-group-id]')) {
     const draft = drafts.find(d => d.groupId === form.dataset.groupId && d.itemId === form.dataset.itemId);
     if (!draft) continue;
+    if (draft.calculationError) form.dataset.calculationError = draft.calculationError;
     for (const input of form.querySelectorAll('[data-field]')) {
       const field = draft.fields.find(f => f.field === input.dataset.field);
       if (!field) continue;
       input.value = field.value;
+      if (field.error) setInputError(input, field.error);
       if (field.focused) {
         input.focus({ preventScroll: true });
         if (field.start != null && typeof input.setSelectionRange === 'function') {
@@ -978,7 +992,7 @@ function validateItemField(el) {
   return value;
 }
 
-function parseItemFields(form) {
+function parseItemFields(form, focusError = true) {
   const fields = {};
   let firstInvalid = null;
   for (const field of Object.keys(ITEM_FIELD_PARSERS)) {
@@ -986,7 +1000,13 @@ function parseItemFields(form) {
     fields[field] = validateItemField(el);
     if (fields[field] === null && !firstInvalid) firstInvalid = el;
   }
-  if (firstInvalid) firstInvalid.focus();
+  if (form.dataset) delete form.dataset.calculationError;
+  if (!firstInvalid && calcUnitPrice(fields) === null) {
+    firstInvalid = form.querySelector('[data-field="unitWeight"]');
+    setInputError(firstInvalid, '超出计算范围，请调整重量、数量或总价。');
+    if (form.dataset) form.dataset.calculationError = 'true';
+  }
+  if (firstInvalid && focusError) firstInvalid.focus();
   return firstInvalid ? null : fields;
 }
 
@@ -1028,9 +1048,12 @@ function initPriceCalculator() {
   renderPriceList();
 
   window.addEventListener('storage', function(e) {
-    if (e.key !== PRICE_STORAGE_KEY) return;
-    const stored = decodeStoredGroups(e.newValue);
-    if (stored.revision <= groupsRevision) return;
+    if (e.key !== PRICE_STORAGE_KEY && e.key !== null) return;
+    // Read the current snapshot: queued events may predate a clear and a new
+    // revision sequence. A reset must also invalidate the old edit session.
+    const stored = readStoredGroups();
+    if (stored.storageError) { showPriceStatus('无法读取浏览器存储，请重试。'); return; }
+    if (stored.revision === groupsRevision && JSON.stringify(stored.groups) === JSON.stringify(groups)) return;
     const previousGroups = groups;
     // Re-render only groups whose content actually changed so in-progress
     // add-form inputs elsewhere survive the sync.
@@ -1061,7 +1084,10 @@ function initPriceCalculator() {
 
   list.addEventListener('input', e => {
     const el = e.target;
-    if (el.dataset.field in ITEM_FIELD_PARSERS && el.getAttribute('aria-invalid') === 'true') validateItemField(el);
+    if (!(el.dataset.field in ITEM_FIELD_PARSERS)) return;
+    const form = el.closest('form');
+    if (form?.dataset.calculationError) parseItemFields(form, false);
+    else if (el.getAttribute('aria-invalid') === 'true') validateItemField(el);
   });
 
   // Single delegated click handler for every action button inside the list.

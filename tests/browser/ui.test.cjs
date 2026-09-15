@@ -174,3 +174,68 @@ test('long group and product names fit mobile cards and editing fields', () => w
   await page.waitForFunction(() => !document.querySelector('.item-edit-form'));
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 }));
+
+for (const operation of ['clear', 'removeItem']) {
+  test(`price synchronization recovers after storage ${operation}`, () => withPage(async (page, context) => {
+    await newGroup(page, '旧组');
+    await page.locator('[data-action=edit]').first().click();
+    const other = await context.newPage(); await other.goto(url);
+    await other.evaluate(operation => operation === 'clear' ? localStorage.clear() : localStorage.removeItem('toolbox_price_groups'), operation);
+    await page.waitForFunction(() => document.querySelectorAll('.group-card').length === 0, null, { timeout: 1500 });
+    assert.equal(await page.locator('.item-edit-form').count(), 0);
+    await other.reload(); await other.locator('#tab-price').click();
+    await newGroup(other, '新记录');
+    await page.waitForFunction(() => document.querySelector('.group-name')?.textContent === '新记录', null, { timeout: 1500 });
+    assert.deepEqual(await page.locator('.group-name').allTextContents(), ['新记录']);
+  }));
+}
+
+test('validation errors survive a full redraw and clear after correction', () => withPage(async page => {
+  const form = page.locator('.group-add-item-form').first();
+  await form.locator('button').click();
+  assert.equal(await form.locator('[aria-invalid=true]').count(), 2);
+  await newGroup(page, '新组');
+  assert.equal(await form.locator('[aria-invalid=true]').count(), 2);
+  await form.locator('[data-field=unitWeight]').fill('100');
+  assert.equal(await form.locator('[aria-invalid=true]').count(), 1);
+  await form.locator('[data-field=totalPrice]').fill('10');
+  assert.equal(await form.locator('[aria-invalid=true]').count(), 0);
+}));
+
+test('safe integer limits remain inside mobile counter cards', () => withPage(async page => {
+  for (const value of [Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER]) {
+    await page.evaluate(value => localStorage.setItem('toolbox_counter', String(value)), value);
+    await page.reload(); await page.locator('#tab-counter').click();
+    await page.evaluate(() => document.fonts.ready);
+    const size = await page.locator('#counter-value').evaluate(el => ({ scroll: el.scrollWidth, width: el.clientWidth, viewport: innerWidth, page: document.documentElement.scrollWidth }));
+    assert.ok(size.scroll <= size.width && size.page <= size.viewport, JSON.stringify(size));
+    assert.equal(await page.locator('#counter-value').textContent(), String(value));
+  }
+}, 320));
+
+test('mobile energy inputs fill their row and the arrow is centered', () => withPage(async page => {
+  await page.locator('#tab-energy').click();
+  const size = await page.evaluate(() => {
+    const row = document.querySelector('.converter-row').getBoundingClientRect();
+    const input = document.querySelector('#input-kj').getBoundingClientRect();
+    const arrow = document.querySelector('.converter-arrows').getBoundingClientRect();
+    return { row: row.width, input: input.width, centerOffset: Math.abs((arrow.left + arrow.width / 2) - (row.left + row.width / 2)) };
+  });
+  assert.ok(Math.abs(size.row - size.input) < 1 && size.centerOffset < 1, JSON.stringify(size));
+}));
+
+test('overflowing price calculations are rejected and can be corrected', () => withPage(async page => {
+  const form = page.locator('.group-add-item-form');
+  for (const weight of ['1e308', '1e-308']) {
+    await form.locator('[data-field=unitWeight]').fill(weight);
+    await form.locator('[data-field=packSize]').fill('2');
+    await form.locator('[data-field=totalPrice]').fill('10');
+    await form.locator('button').click();
+    assert.match(await form.innerText(), /计算范围/);
+    assert.equal(await page.locator('.item-card').count(), 2);
+  }
+  await form.locator('[data-field=unitWeight]').fill('100');
+  await form.locator('button').click();
+  await page.waitForFunction(() => document.querySelectorAll('.item-card').length === 3);
+  assert.doesNotMatch(await page.locator('#price-list').innerText(), /Infinity|NaN/);
+}));

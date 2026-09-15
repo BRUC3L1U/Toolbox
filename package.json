@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "test": "node --check app.js && node --test tests/*.test.js",
-    "test:browser": "node --test tests/browser/*.test.cjs"
+    "test:browser": "node --test tests/browser/*.test.cjs",
+    "test:deploy": "node --test tests/deployment/*.test.cjs"
   },
   "devDependencies": {
     "playwright": "1.63.0",
